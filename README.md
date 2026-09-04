@@ -3,11 +3,11 @@
 An interactive 3D globe for seeing, at a glance, **where it's night and where it's day right now** — and what the local time and weather are anywhere you click.
 
 Everything lives in a single file: [`index.html`](index.html). No build step, no server.
+LIVE Demo: [DEMO](https://compiledex.github.io/kg-class-studiotask/)
 
 ## Run it
 
 Open `index.html` in a modern browser (Chrome, Edge, Firefox, Safari).
-LIVE Demo: [DEMO](https://compiledex.github.io/kg-class-studiotask/)
 An internet connection is required — the page pulls libraries, map textures and
 live weather from CDNs and public APIs at runtime:
 
