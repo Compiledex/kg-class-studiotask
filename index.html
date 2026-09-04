@@ -38,6 +38,17 @@
   #utc{margin-top:10px;font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted)}
   #utc b{color:var(--text);letter-spacing:.5px}
 
+  #search{margin-top:12px;border:1px solid var(--border);border-radius:10px;background:rgba(0,0,0,.25);overflow:hidden}
+  #searchInput{width:100%;box-sizing:border-box;border:0;background:transparent;color:var(--text);
+    font-size:13px;padding:9px 12px;outline:none}
+  #searchInput::placeholder{color:#6b7691}
+  #searchResults{max-height:216px;overflow-y:auto}
+  #searchResults:empty{display:none}
+  #searchResults .hit{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+    padding:7px 12px;font-size:12.5px;cursor:pointer;border-top:1px solid rgba(255,255,255,.06)}
+  #searchResults .hit:hover,#searchResults .hit.sel{background:rgba(255,255,255,.08)}
+  #searchResults .hit .cc{color:var(--muted);font-size:11.5px;white-space:nowrap}
+
   /* bottom-left legend + toggles */
   #legend{bottom:16px;left:16px;padding:12px 14px;font-size:12.5px}
   #legend .row{display:flex;align-items:center;gap:8px;margin:5px 0}
@@ -116,15 +127,21 @@
   </div>
   <div id="utc">UTC now <b id="utcClock">--:--:--</b></div>
   <div id="wxLine" hidden></div>
+  <div id="search">
+    <input id="searchInput" type="text" placeholder="Search a capital…" autocomplete="off" spellcheck="false" />
+    <div id="searchResults"></div>
+  </div>
 </div>
 
 <div id="legend" class="panel">
-  <div class="row"><span class="dot sun"></span> Capital in daylight</div>
-  <div class="row"><span class="dot night"></span> Capital in night</div>
+  <div id="legDots" hidden>
+    <div class="row"><span class="dot sun"></span> Capital in daylight</div>
+    <div class="row"><span class="dot night"></span> Capital in night</div>
+  </div>
+  <div id="legWx" class="row" style="flex-wrap:wrap;max-width:210px;line-height:1.7">☀️ clear&nbsp; ⛅ cloud&nbsp; 🌫️ fog&nbsp; 🌧️ rain&nbsp; 🌨️ snow&nbsp; ⛈️ storm</div>
   <div class="row"><label><input type="checkbox" id="tRotate" checked> Auto-rotate</label></div>
   <div class="row"><label><input type="checkbox" id="tClouds"> Clouds</label></div>
-  <div class="row"><label><input type="checkbox" id="tWx"> Weather map</label></div>
-  <div class="row"><label><input type="checkbox" id="tNames"> Show capital names</label></div>
+  <div class="row"><label><input type="checkbox" id="tWx" checked> Weather map</label></div>
   <div class="hint">Drag to spin · scroll to zoom · ☀️ marks where the Sun is directly overhead</div>
 </div>
 
@@ -441,15 +458,6 @@ const world = new Globe(el('globeViz'), {
     return `<div style="font:600 12px -apple-system,sans-serif;background:rgba(10,14,22,.9);border:1px solid rgba(255,255,255,.15);padding:4px 8px;border-radius:6px;color:#fff">${d.c}<span style="color:#9aa6bd;font-weight:400"> · ${d.n}</span>${wx}</div>`;
   })
   .onPointClick(d => selectLocation(d))
-  // capital name labels (toggle)
-  .labelsData([])
-  .labelLat('lat').labelLng('lng')
-  .labelText('c')
-  .labelSize(0.5)
-  .labelDotRadius(0.15)
-  .labelColor(() => 'rgba(255,255,255,.7)')
-  .labelResolution(1)
-  .onLabelClick(d => selectLocation(d))
   // selection ring
   .ringsData([])
   .ringColor(() => t => `rgba(255,210,63,${1 - t})`)
@@ -565,7 +573,6 @@ function updateDayNight(){
   let dark = 0;
   for (const c of CAPITALS){ c.__dark = isDark(c.lat, c.lng, sun); if (c.__dark) dark++; }
   applyPointStyle();
-  if (tNamesOn) world.labelsData(CAPITALS.slice());
   el('nDark').textContent = dark;
   el('nDay').textContent = CAPITALS.length - dark;
 }
@@ -607,11 +614,6 @@ function ensureClouds(){
 el('tClouds').addEventListener('change', e => {
   if (e.target.checked) ensureClouds();
   if (cloudMesh) cloudMesh.visible = e.target.checked;
-});
-let tNamesOn = false;
-el('tNames').addEventListener('change', e => {
-  tNamesOn = e.target.checked;
-  world.labelsData(tNamesOn ? CAPITALS.slice() : []);
 });
 
 /* ---------- location detail panel ---------- */
@@ -814,7 +816,9 @@ const WeatherFX = (() => {
 /* ---------- global "weather map" layer ---------- */
 let wxOn = false, wxTimer = null, wxLoading = false;
 let wxGroup = null, wxRain = null, wxSnow = null, wxIcons = [], wxRainP = [], wxSnowP = [], wxRAF = 0, wxLastT = 0;
-const wxSpriteTex = {}, wxSpriteMat = {};
+const wxSpriteTex = {};
+const _pp = new THREE.Vector3(), _pn = new THREE.Vector3(), _pd = new THREE.Vector3();
+const ICON_MULT = { storm: 1.2, showers: 1.1, snow: 1.08, rain: 1.05 };
 const GLOBE_R = (world.getGlobeRadius && world.getGlobeRadius()) || 100;
 
 // polar -> cartesian, matching three-globe's own mapping so markers sit on the capitals
@@ -832,11 +836,11 @@ function emojiTex(ch){
   const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
   return t;
 }
-function spriteMat(key, ch){
-  if (!wxSpriteTex[key]) wxSpriteTex[key] = emojiTex(ch);
-  if (!wxSpriteMat[key]) wxSpriteMat[key] = new THREE.SpriteMaterial({ map: wxSpriteTex[key], transparent: true, depthWrite: false });
-  wxSpriteMat[key].opacity = 1;
-  return wxSpriteMat[key];
+function makeSprite(key, ch){
+  if (!wxSpriteTex[key]) wxSpriteTex[key] = emojiTex(ch);           // textures are shared
+  return new THREE.Sprite(new THREE.SpriteMaterial({                // material is per-icon (own opacity)
+    map: wxSpriteTex[key], transparent: true, depthWrite: false
+  }));
 }
 // icon key + glyph for a capital, taking day/night into account for clear/partly skies
 function wxIcon(c){
@@ -851,6 +855,7 @@ function buildWxGlobe(){
   cancelAnimationFrame(wxRAF);
   if (wxGroup){
     world.scene().remove(wxGroup);
+    for (const s of wxIcons) s.material.dispose();
     if (wxRain){ wxRain.geometry.dispose(); wxRain.material.dispose(); }
     if (wxSnow){ wxSnow.geometry.dispose(); wxSnow.material.dispose(); }
   }
@@ -870,11 +875,13 @@ function buildWxGlobe(){
     const north = new THREE.Vector3().crossVectors(up, east).normalize();
     basis.set(c, { P, up, east, north });
 
+    const kind = kindOf(c.wx.code);
     const [key, ch] = wxIcon(c);                         // every capital gets an icon — sun included
-    const spr = new THREE.Sprite(spriteMat(key, ch));
-    const s = GLOBE_R * 0.05; spr.scale.set(s, s, 1);
-    spr.position.copy(P).addScaledVector(up, GLOBE_R * 0.045);
-    spr.userData.kind = kindOf(c.wx.code);
+    const spr = makeSprite(key, ch);
+    const base = GLOBE_R * 0.05 * (ICON_MULT[kind] || 1);
+    spr.scale.set(base, base, 1);
+    spr.position.copy(P).addScaledVector(up, GLOBE_R * 0.055);
+    spr.userData = { kind, base, cur: 1, op: 1, sx: -1, sy: -1 };
     wxGroup.add(spr); wxIcons.push(spr);
   }
 
@@ -946,17 +953,54 @@ function wxTick(ts){
     }
     wxSnow.geometry.attributes.position.needsUpdate = true;
   }
-  if (wxSpriteMat.storm){
-    wxSpriteMat.storm.opacity = Math.random() < 0.05 ? 1 : 0.68 + Math.random() * 0.12;
+  // --- icons: fade out toward the limb (so they never get clipped) + shrink where they crowd ---
+  if (wxIcons.length){
+    const cam = world.camera();
+    const dom = world.renderer().domElement;
+    const W = dom.clientWidth || window.innerWidth;
+    const H = dom.clientHeight || window.innerHeight;
+    const stormFlick = Math.random() < 0.05 ? 1 : 0.7 + Math.random() * 0.14;
+    const SPACING = 44;
+
+    for (const s of wxIcons){
+      _pn.copy(s.position).normalize();
+      _pd.copy(s.position).sub(cam.position).normalize();
+      const facing = -_pn.dot(_pd);                         // 1 = square to camera, <=0 = limb / far side
+      s.userData.op = facing <= 0.18 ? 0 : Math.min(1, (facing - 0.18) / 0.32);
+      if (s.userData.op <= 0){ s.visible = false; continue; }
+      _pp.copy(s.position).project(cam);
+      s.userData.sx = (_pp.x * 0.5 + 0.5) * W;
+      s.userData.sy = (1 - (_pp.y * 0.5 + 0.5)) * H;
+      s.visible = true;
+    }
+    for (let i = 0; i < wxIcons.length; i++){
+      const a = wxIcons[i];
+      if (!a.visible) continue;
+      let nd2 = Infinity;
+      for (let j = 0; j < wxIcons.length; j++){
+        if (j === i || !wxIcons[j].visible) continue;
+        const dx = a.userData.sx - wxIcons[j].userData.sx;
+        const dy = a.userData.sy - wxIcons[j].userData.sy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < nd2) nd2 = d2;
+      }
+      const f = Math.max(0.4, Math.min(1, Math.sqrt(nd2) / SPACING));
+      a.userData.cur += (f - a.userData.cur) * Math.min(1, dt * 9);
+      const sz = a.userData.base * a.userData.cur;
+      a.scale.set(sz, sz, 1);
+      a.material.opacity = a.userData.op * (a.userData.kind === 'storm' ? stormFlick : 1);
+    }
   }
   wxRAF = requestAnimationFrame(wxTick);
 }
 
 function applyPointStyle(){
-  world.pointColor(d => {
-    if (wxOn && d.wx && d.wx.code != null) return WX_COLOR[kindOf(d.wx.code)] || '#9fb0c6';
-    return d.__dark ? '#7aa2ff' : '#ffd23f';
-  });
+  if (wxOn){
+    // weather icons mark the capitals — hide the plain pins
+    world.pointColor(() => 'rgba(0,0,0,0)').pointRadius(0.01).pointAltitude(0.001);
+  } else {
+    world.pointColor(d => d.__dark ? '#7aa2ff' : '#ffd23f').pointRadius(0.28).pointAltitude(0.012);
+  }
   world.pointsData(CAPITALS.slice());
 }
 function updateWxLine(){
@@ -998,7 +1042,11 @@ el('tWx').addEventListener('change', e => {
   applyPointStyle();
   updateWxLine();
   buildWxGlobe();
+  el('legDots').hidden = wxOn;
+  el('legWx').hidden = !wxOn;
 });
+// Weather map is on by default — run the enable path now
+if (el('tWx').checked) el('tWx').dispatchEvent(new Event('change'));
 
 let clockTimer = null;
 let reqToken = 0;
@@ -1120,6 +1168,50 @@ el('closePanel').addEventListener('click', () => {
   WeatherFX.stop();
   reqToken++;
 });
+
+/* ---------- capital search ---------- */
+const searchInput = el('searchInput'), searchResults = el('searchResults');
+const norm = s => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+let searchHits = [], searchSel = -1;
+
+function runSearch(){
+  const q = norm(searchInput.value.trim());
+  searchResults.innerHTML = ''; searchSel = -1;
+  if (!q){ searchHits = []; return; }
+  searchHits = CAPITALS
+    .map(c => ({ c, city: norm(c.c), country: norm(c.n) }))
+    .filter(o => o.city.includes(q) || o.country.includes(q))
+    .sort((a, b) => (a.city.startsWith(q) ? 0 : 1) - (b.city.startsWith(q) ? 0 : 1) || a.c.c.localeCompare(b.c.c))
+    .slice(0, 8)
+    .map(o => o.c);
+  searchHits.forEach((c, i) => {
+    const div = document.createElement('div');
+    div.className = 'hit';
+    div.innerHTML = `<span>${c.c}</span><span class="cc">${c.n}</span>`;
+    div.addEventListener('mousedown', ev => { ev.preventDefault(); pickHit(i); });
+    searchResults.appendChild(div);
+  });
+}
+function pickHit(i){
+  const c = searchHits[i]; if (!c) return;
+  searchInput.value = ''; searchResults.innerHTML = '';
+  searchHits = []; searchSel = -1; searchInput.blur();
+  selectLocation(c);
+}
+function moveSel(d){
+  if (!searchHits.length) return;
+  searchSel = (searchSel + d + searchHits.length) % searchHits.length;
+  [...searchResults.children].forEach((n, i) => n.classList.toggle('sel', i === searchSel));
+}
+searchInput.addEventListener('input', runSearch);
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown'){ e.preventDefault(); moveSel(1); }
+  else if (e.key === 'ArrowUp'){ e.preventDefault(); moveSel(-1); }
+  else if (e.key === 'Enter'){ e.preventDefault(); pickHit(searchSel >= 0 ? searchSel : 0); }
+  else if (e.key === 'Escape'){ searchInput.value = ''; runSearch(); searchInput.blur(); }
+});
+searchInput.addEventListener('blur', () => setTimeout(() => { searchResults.innerHTML = ''; }, 120));
+searchInput.addEventListener('focus', runSearch);
 
 /* ---------- resize ---------- */
 addEventListener('resize', () => {
