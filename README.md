@@ -39,10 +39,13 @@ view still work if the border/texture CDNs are unreachable.
   humidity, wind and precipitation.
 - **Animated weather scene** in the panel (sun/moon, drifting clouds, rain,
   snow, fog, lightning) driven by the WMO weather code.
-- **Weather map** (on by default) — one batched Open-Meteo call fetches the
-  current conditions for ~195 capitals and shows a floating condition icon over
-  each one on the globe, with animated rain/snow falling onto the surface,
-  storm-icon flicker, a HUD tally, and dot colouring when the icons are off.
+- **Weather map** (on by default) — a single batched Open-Meteo call fetches
+  full current conditions *and* each capital's own timezone for all ~195
+  capitals at once (cached 20 min in `localStorage`, so reloads cost no extra
+  API calls). It feeds both the floating condition icon over every capital on
+  the globe — with animated rain/snow falling onto the surface, storm-icon
+  flicker, a HUD tally, and dot colouring when the icons are off — *and* the
+  detail panel above, so clicking a capital never needs a second request.
   Icons fade near the globe's edge and shrink where they crowd together.
 - **Search** any capital from the HUD box — live results as you type
   (accent-insensitive), arrow keys / Enter / click to fly there.

@@ -1071,7 +1071,7 @@ function updateWxLine(){
   line.hidden = false;
 }
 
-const WX_CACHE_KEY = 'wxGlobalCache';
+const WX_CACHE_KEY = 'wxGlobalCacheV2';   // v2: rows now carry full detail + per-capital timezone
 const WX_CACHE_MS = 20 * 60 * 1000;   // Open-Meteo free tier counts each location as a call — cache hard
 function readWxCache(){
   try {
@@ -1080,8 +1080,13 @@ function readWxCache(){
   } catch (e) {}
   return null;
 }
+// r = { code, temp, isDay, feels-like, humidity, wind speed/dir, precip, timezone, utc offset }
 function applyWxRows(rows){
-  rows.forEach((r, i) => { if (CAPITALS[i] && r) CAPITALS[i].wx = { code: r.c, temp: r.t, isDay: r.i }; });
+  rows.forEach((r, i) => { if (CAPITALS[i] && r) CAPITALS[i].wx = {
+    code: r.c, temp: r.t, isDay: r.i,
+    feels: r.f, hum: r.h, wind: r.w, windDir: r.d, precip: r.p,
+    tz: r.z, offset: r.o
+  }; });
 }
 
 function fetchGlobalWx(force){
@@ -1098,13 +1103,25 @@ function fetchGlobalWx(force){
   wxLoading = true; wxError = ''; updateWxLine();
   const lat = CAPITALS.map(c => c.lat.toFixed(3)).join(',');
   const lng = CAPITALS.map(c => c.lng.toFixed(3)).join(',');
-  fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=weather_code,temperature_2m,is_day&timezone=UTC`)
+  // everything the capital-detail panel needs comes from this one batched call —
+  // there's no second per-click request left to fail or get separately rate-limited
+  const params = new URLSearchParams({
+    latitude: lat, longitude: lng,
+    current: 'weather_code,temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,wind_direction_10m,is_day',
+    wind_speed_unit: 'ms', timezone: 'auto'
+  });
+  fetch('https://api.open-meteo.com/v1/forecast?' + params)
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(res => {
       const list = Array.isArray(res) ? res : [res];
       const rows = CAPITALS.map((c, i) => {
-        const cur = (list[i] && list[i].current) || {};
-        return { c: cur.weather_code, t: cur.temperature_2m, i: cur.is_day };
+        const o = list[i] || {}, cur = o.current || {};
+        return {
+          c: cur.weather_code, t: cur.temperature_2m, i: cur.is_day,
+          f: cur.apparent_temperature, h: cur.relative_humidity_2m,
+          w: cur.wind_speed_10m, d: cur.wind_direction_10m, p: cur.precipitation,
+          z: o.timezone, o: o.utc_offset_seconds
+        };
       });
       applyWxRows(rows);
       wxLoading = false; wxError = '';
@@ -1154,102 +1171,87 @@ function selectLocation(cap){
   el('pCoords').textContent = `${cap.lat.toFixed(2)}°, ${cap.lng.toFixed(2)}°`;
   world.ringsData([{ lat: cap.lat, lng: cap.lng }]);
   world.pointOfView({ lat: cap.lat, lng: cap.lng, altitude: 1.7 }, 900);
-  startClock(guessTz(cap.lng), cap.lng / 15 * 3600);   // provisional — replaced if the detailed call succeeds
 
-  const haveQuick = cap.wx && cap.wx.code != null;      // reading from the weather-map batch, if we have one
-  const quickNight = haveQuick && cap.wx.isDay != null ? cap.wx.isDay === 0 : isDark(cap.lat, cap.lng, getSunPosition(new Date()));
+  renderWeatherPanel(cap);
+
+  // capital weather all comes from the one shared batched call (see fetchGlobalWx) — if it
+  // hasn't arrived yet for this city, poll briefly and nudge a fetch rather than firing a
+  // second, separately-rate-limitable request
+  if (!(cap.wx && cap.wx.code != null)){
+    if (!hasWxData() && !wxLoading) fetchGlobalWx();
+    let tries = 0;
+    const poll = setInterval(() => {
+      tries++;
+      const have = cap.wx && cap.wx.code != null;
+      if (token !== reqToken || have || tries >= 8){
+        clearInterval(poll);
+        if (token === reqToken) renderWeatherPanel(cap, !have && tries >= 8);
+      }
+    }, 800);
+  }
+}
+
+function renderWeatherPanel(cap, gaveUp){
+  const have = cap.wx && cap.wx.code != null;
+  const night = have && cap.wx.isDay != null ? cap.wx.isDay === 0 : isDark(cap.lat, cap.lng, getSunPosition(new Date()));
   const badge = el('pDayNight');
-  badge.textContent = quickNight ? '🌙 Night' : '☀️ Daytime';
-  badge.className = 'badge ' + (quickNight ? 'night' : 'day');
+  badge.textContent = night ? '🌙 Night' : '☀️ Daytime';
+  badge.className = 'badge ' + (night ? 'night' : 'day');
 
-  if (haveQuick){
+  if (have){
+    startClock(cap.wx.tz, cap.wx.offset);
     let [desc, icon] = WMO[cap.wx.code] || ['—','•'];
-    if (quickNight && (cap.wx.code === 0 || cap.wx.code === 1)) icon = '🌙';
-    WeatherFX.set(cap.wx.code, !quickNight);
+    if (night && (cap.wx.code === 0 || cap.wx.code === 1)) icon = '🌙';
+    WeatherFX.set(cap.wx.code, !night);
     el('fxTemp').textContent = fmtTemp(cap.wx.temp);
     el('fxIcon').textContent = icon;
     el('fxText').textContent = desc;
+    el('pFeels').textContent = fmtTemp(cap.wx.feels);
+    el('pHum').textContent = cap.wx.hum != null ? Math.round(cap.wx.hum) + '%' : '–';
+    el('pWind').textContent = cap.wx.wind != null ? `${cap.wx.wind.toFixed(1)} m/s ${compass(cap.wx.windDir || 0)}` : '–';
+    el('pPrecip').textContent = cap.wx.precip != null ? cap.wx.precip.toFixed(1) + ' mm' : '–';
+    el('pWx').hidden = false;
+    el('pState').hidden = true;
+  } else if (gaveUp){
+    startClock(null, cap.lng / 15 * 3600);
+    WeatherFX.set(null, !night);
+    el('fxTemp').textContent = '–';
+    el('fxIcon').textContent = '⚠️';
+    el('fxText').textContent = 'Weather unavailable';
+    el('pWx').hidden = true;
+    el('pState').className = 'state err';
+    el('pState').textContent = wxError
+      ? `Weather unavailable — ${wxError}. Local time is estimated from longitude.`
+      : 'Weather unavailable (offline?). Local time is estimated from longitude.';
+    el('pState').hidden = false;
   } else {
+    startClock(null, cap.lng / 15 * 3600);
     WeatherFX.start();
     el('fxTemp').textContent = '–'; el('fxIcon').textContent = '⏳'; el('fxText').textContent = 'Loading…';
+    el('pFeels').textContent = '–'; el('pHum').textContent = '–';
+    el('pWind').textContent = '–'; el('pPrecip').textContent = '–';
+    el('pWx').hidden = false;
+    el('pState').className = 'state';
+    el('pState').innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px"></span>Loading weather…';
+    el('pState').hidden = false;
   }
-  el('pFeels').textContent = '–'; el('pHum').textContent = '–';
-  el('pWind').textContent = '–'; el('pPrecip').textContent = '–';
-  el('pWx').hidden = false;
-  el('pState').hidden = false;
-  el('pState').className = 'state';
-  el('pState').innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px"></span>' +
-    (haveQuick ? 'Refining details…' : 'Loading weather…');
-
-  const params = new URLSearchParams({
-    latitude: cap.lat, longitude: cap.lng,
-    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m',
-    wind_speed_unit: 'ms', timezone: 'auto'
-  });
-
-  fetch('https://api.open-meteo.com/v1/forecast?' + params)
-    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-    .then(data => {
-      if (token !== reqToken) return;               // a newer click superseded this one
-      const cur = data.current || {};
-      const night = cur.is_day === 0;
-
-      startClock(data.timezone, data.utc_offset_seconds);
-      badge.textContent = night ? '🌙 Night' : '☀️ Daytime';
-      badge.className = 'badge ' + (night ? 'night' : 'day');
-
-      let [desc, icon] = WMO[cur.weather_code] || ['—','•'];
-      if (night && (cur.weather_code === 0 || cur.weather_code === 1)) icon = '🌙';
-
-      WeatherFX.set(cur.weather_code, !night);
-      el('fxTemp').textContent = fmtTemp(cur.temperature_2m);
-      el('fxIcon').textContent = icon;
-      el('fxText').textContent = desc;
-      el('pFeels').textContent = fmtTemp(cur.apparent_temperature);
-      el('pHum').textContent = cur.relative_humidity_2m != null ? cur.relative_humidity_2m + '%' : '–';
-      el('pWind').textContent = cur.wind_speed_10m != null
-        ? `${cur.wind_speed_10m.toFixed(1)} m/s ${compass(cur.wind_direction_10m || 0)}` : '–';
-      el('pPrecip').textContent = cur.precipitation != null ? cur.precipitation.toFixed(1) + ' mm' : '–';
-
-      el('pState').hidden = true;
-      el('pWx').hidden = false;
-    })
-    .catch(err => {
-      if (token !== reqToken) return;
-      console.error(err);
-      if (haveQuick){
-        // keep showing the weather-map reading; just flag that the extra detail didn't come through
-        el('pState').className = 'state';
-        el('pState').textContent = /429/.test(String(err))
-          ? 'Live detail rate-limited — showing the weather-map reading. Local time is approximate.'
-          : 'Live detail unavailable — showing the weather-map reading. Local time is approximate.';
-        el('pState').hidden = false;
-      } else {
-        WeatherFX.set(null, !quickNight);
-        el('fxTemp').textContent = '–';
-        el('fxIcon').textContent = '⚠️';
-        el('fxText').textContent = 'Weather unavailable';
-        el('pWx').hidden = true;
-        el('pState').className = 'state err';
-        el('pState').textContent = /429/.test(String(err))
-          ? 'Weather rate-limited — try again later. Local time is estimated from longitude.'
-          : 'Weather unavailable (offline?). Local time is estimated from longitude.';
-        el('pState').hidden = false;
-      }
-    });
 }
 
 function fmtTemp(v){ return v == null ? '–' : Math.round(v) + '°C'; }
 
 function startClock(tz, offsetSeconds){
   clearInterval(clockTimer);
-  let fmtT, fmtD;
-  try {
-    fmtT = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    fmtD = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'long', day: 'numeric', month: 'long' });
-  } catch(e){ tz = 'UTC'; offsetSeconds = 0; }
+  // only trust Intl's timezone database with a real IANA name (e.g. "Europe/Oslo") —
+  // a bare UTC offset must NOT go through it, or every city would render as literal UTC
+  let fmtT = null, fmtD = null;
+  if (tz){
+    try {
+      fmtT = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      fmtD = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'long', day: 'numeric', month: 'long' });
+    } catch(e){ fmtT = null; fmtD = null; }
+  }
 
-  el('pTz').textContent = (tz && tz !== 'UTC' ? tz.replace(/_/g,' ') + ' · ' : '') + 'UTC' + fmtOffset(offsetSeconds);
+  el('pTz').textContent = (fmtT ? tz.replace(/_/g,' ') + ' · ' : 'approx. ') + 'UTC' + fmtOffset(offsetSeconds);
 
   const tick = () => {
     const now = new Date();
@@ -1257,7 +1259,7 @@ function startClock(tz, offsetSeconds){
       el('pTime').textContent = fmtT.format(now);
       el('pDate').textContent = fmtD.format(now);
     } else {
-      const loc = new Date(now.getTime() + (offsetSeconds||0) * 1000);
+      const loc = new Date(now.getTime() + (offsetSeconds || 0) * 1000);
       el('pTime').textContent = loc.toISOString().slice(11, 19);
       el('pDate').textContent = loc.toUTCString().slice(0, 16);
     }
@@ -1273,7 +1275,6 @@ function fmtOffset(sec){
   const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
   return `${s}${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
 }
-function guessTz(lng){ return 'UTC'; }
 
 el('closePanel').addEventListener('click', () => {
   el('panel').classList.remove('open');
