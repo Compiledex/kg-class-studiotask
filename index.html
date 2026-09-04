@@ -1,0 +1,1129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Where's it dark?</title>
+<style>
+  :root{
+    --bg:#05070d;
+    --sun:#ffd23f;
+    --night:#7aa2ff;
+    --glass:rgba(16,20,31,.72);
+    --border:rgba(255,255,255,.12);
+    --text:#e8ecf4;
+    --muted:#9aa6bd;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  #globeViz{position:fixed;inset:0}
+  #globeViz canvas{display:block}
+
+  .panel{
+    position:fixed;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+    background:var(--glass);border:1px solid var(--border);border-radius:16px;
+    box-shadow:0 12px 40px rgba(0,0,0,.45)
+  }
+
+  /* top-left heads-up display */
+  #hud{top:16px;left:16px;padding:16px 18px;max-width:320px}
+  #hud h1{margin:0 0 2px;font-size:18px;letter-spacing:.2px}
+  #hud .sub{color:var(--muted);font-size:12.5px;line-height:1.5;margin-bottom:10px}
+  #hud .counts{display:flex;gap:14px;font-size:13px}
+  #hud .counts b{font-size:16px}
+  .dark b{color:var(--night)}
+  .day b{color:var(--sun)}
+  #utc{margin-top:10px;font-variant-numeric:tabular-nums;font-size:12.5px;color:var(--muted)}
+  #utc b{color:var(--text);letter-spacing:.5px}
+
+  /* bottom-left legend + toggles */
+  #legend{bottom:16px;left:16px;padding:12px 14px;font-size:12.5px}
+  #legend .row{display:flex;align-items:center;gap:8px;margin:5px 0}
+  #legend .dot{width:10px;height:10px;border-radius:50%}
+  #legend .dot.sun{background:var(--sun);box-shadow:0 0 8px var(--sun)}
+  #legend .dot.night{background:var(--night);box-shadow:0 0 8px var(--night)}
+  #legend label{display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);user-select:none}
+  #legend label:hover{color:var(--text)}
+  #legend input{accent-color:var(--sun);cursor:pointer}
+  #legend .hint{margin-top:8px;color:#6b7691;font-size:11.5px;max-width:210px;line-height:1.45}
+  #wxLine{margin-top:9px;font-size:12px;color:var(--muted);letter-spacing:.2px}
+
+  /* right-hand detail panel */
+  #panel{top:16px;right:16px;width:340px;max-width:calc(100vw - 32px);padding:20px;
+    transform:translateX(calc(100% + 32px));transition:transform .35s cubic-bezier(.22,1,.36,1)}
+  #panel.open{transform:translateX(0)}
+  #closePanel{position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);
+    font-size:22px;line-height:1;cursor:pointer;padding:4px}
+  #closePanel:hover{color:var(--text)}
+  #pCity{font-size:21px;font-weight:600}
+  #pCountry{color:var(--muted);font-size:13px;margin-top:2px}
+  .clock{margin:16px 0 12px}
+  #pTime{font-size:38px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:1px;line-height:1}
+  #pDate{color:var(--muted);font-size:13px;margin-top:4px}
+  #pTz{color:#6b7691;font-size:11.5px;margin-top:2px}
+  .badge{display:inline-block;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600;
+    border:1px solid var(--border)}
+  .badge.night{color:var(--night);background:rgba(122,162,255,.12)}
+  .badge.day{color:var(--sun);background:rgba(255,210,63,.12)}
+  #fxBanner{position:relative;height:132px;border-radius:12px;overflow:hidden;
+    margin:14px 0 4px;border:1px solid var(--border);background:linear-gradient(#0b1836,#152a52)}
+  #pFx{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #fxTemp{position:absolute;top:9px;left:14px;font-size:34px;font-weight:700;letter-spacing:.5px;
+    font-variant-numeric:tabular-nums;text-shadow:0 2px 10px rgba(0,0,0,.55)}
+  #fxCond{position:absolute;left:14px;bottom:9px;display:flex;align-items:center;gap:7px;
+    font-size:13px;font-weight:600;text-shadow:0 1px 6px rgba(0,0,0,.7)}
+  #fxIcon{font-size:19px}
+  .wx{margin-top:14px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:2px}
+  .grid>div{display:flex;flex-direction:column;gap:2px}
+  .grid span{color:#6b7691;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .grid b{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+  #pCoords{margin-top:14px;color:#6b7691;font-size:11.5px;font-variant-numeric:tabular-nums}
+  .src{margin-top:6px;color:#556;font-size:11px}
+  .state{color:var(--muted);font-size:13px;margin-top:16px}
+  .state.err{color:#ff8b8b}
+
+  #loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:var(--bg);z-index:50;transition:opacity .6s;font-size:14px;color:var(--muted)}
+  #loading.hidden{opacity:0;pointer-events:none}
+  .spin{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--sun);
+    border-radius:50%;animation:sp 1s linear infinite;margin-right:10px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  .sun-marker{font-size:22px;filter:drop-shadow(0 0 10px var(--sun));pointer-events:none;
+    transform:translate(-50%,-50%);will-change:transform}
+
+  @media (max-width:520px){
+    #hud{max-width:calc(100vw - 32px)}
+    #panel{top:auto;bottom:16px;right:16px;left:16px;width:auto;
+      transform:translateY(calc(100% + 32px))}
+    #panel.open{transform:translateY(0)}
+    #legend{display:none}
+  }
+</style>
+</head>
+<body>
+<div id="globeViz"></div>
+
+<div id="hud" class="panel">
+  <h1>Where's it dark?</h1>
+  <div class="sub">Spin the globe — the shadowed half is night right now. Click any country or capital for its local time &amp; weather.</div>
+  <div class="counts">
+    <div class="dark">🌙 <b id="nDark">–</b> in night</div>
+    <div class="day">☀️ <b id="nDay">–</b> in daylight</div>
+  </div>
+  <div id="utc">UTC now <b id="utcClock">--:--:--</b></div>
+  <div id="wxLine" hidden></div>
+</div>
+
+<div id="legend" class="panel">
+  <div class="row"><span class="dot sun"></span> Capital in daylight</div>
+  <div class="row"><span class="dot night"></span> Capital in night</div>
+  <div class="row"><label><input type="checkbox" id="tRotate" checked> Auto-rotate</label></div>
+  <div class="row"><label><input type="checkbox" id="tClouds"> Clouds</label></div>
+  <div class="row"><label><input type="checkbox" id="tWx"> Weather map</label></div>
+  <div class="row"><label><input type="checkbox" id="tNames"> Show capital names</label></div>
+  <div class="hint">Drag to spin · scroll to zoom · ☀️ marks where the Sun is directly overhead</div>
+</div>
+
+<div id="panel" class="panel">
+  <button id="closePanel" aria-label="Close">×</button>
+  <div id="fxBanner">
+    <canvas id="pFx"></canvas>
+    <div id="fxTemp">–</div>
+    <div id="fxCond"><span id="fxIcon">·</span><span id="fxText"></span></div>
+  </div>
+  <div id="pCity">–</div>
+  <div id="pCountry"></div>
+  <div class="clock">
+    <div id="pTime">--:--:--</div>
+    <div id="pDate"></div>
+    <div id="pTz"></div>
+  </div>
+  <span id="pDayNight" class="badge">–</span>
+  <div id="pState" class="state"><span class="spin" style="display:inline-block;vertical-align:-2px"></span>Loading weather…</div>
+  <div class="wx" id="pWx" hidden>
+    <div class="grid">
+      <div><span>Feels like</span><b id="pFeels">–</b></div>
+      <div><span>Humidity</span><b id="pHum">–</b></div>
+      <div><span>Wind</span><b id="pWind">–</b></div>
+      <div><span>Precip</span><b id="pPrecip">–</b></div>
+    </div>
+  </div>
+  <div id="pCoords"></div>
+  <div class="src">Weather &amp; timezone data from Open‑Meteo</div>
+</div>
+
+<div id="loading"><span class="spin"></span>Loading the globe…</div>
+
+<script>
+/* surface load failures instead of spinning forever */
+(function(){
+  function show(msg){
+    var l = document.getElementById('loading');
+    if (!l) return;
+    l.classList.remove('hidden');
+    l.style.padding = '24px';
+    l.innerHTML =
+      '<div style="max-width:520px;text-align:left;line-height:1.55">' +
+      '<div style="font-size:15px;color:#ff8b8b;margin-bottom:10px">The globe failed to load</div>' +
+      '<div style="font-size:12.5px;color:#9aa6bd;white-space:pre-wrap;word-break:break-word">' +
+      String(msg).replace(/</g,'&lt;') + '</div>' +
+      '<div style="font-size:12px;color:#6b7691;margin-top:14px">This page needs internet access to <b>esm.sh</b>, <b>unpkg.com</b>, ' +
+      '<b>jsdelivr.net</b> and <b>open-meteo.com</b>. On a restricted network, VPN, or offline, that is the cause. ' +
+      'Open the browser console (⌥⌘I) for the full error.</div></div>';
+  }
+  window.__globeFatal = show;
+  window.addEventListener('unhandledrejection', function(e){
+    var r = e && e.reason;
+    show((r && (r.message || r.stack)) || String(r));
+  });
+  window.addEventListener('error', function(e){
+    if (e && e.filename && /esm\.sh|unpkg|jsdelivr/.test(e.filename)) show(e.message + '\n' + e.filename);
+  });
+})();
+</script>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://esm.sh/three",
+    "three/": "https://esm.sh/three/"
+  }
+}
+</script>
+
+<script type="module">
+let THREE, Globe;
+try {
+  THREE = await import('three');
+  Globe = (await import('https://esm.sh/globe.gl?external=three')).default;
+} catch (err) {
+  window.__globeFatal('Could not import the 3D globe libraries.\n\n' + (err && (err.message || err)));
+  throw err;
+}
+
+/* ---------- capitals (country, city, lat, lng) ---------- */
+const CAPITALS = [
+["Kabul","Afghanistan",34.53,69.17],["Tirana","Albania",41.33,19.82],["Algiers","Algeria",36.75,3.06],["Andorra la Vella","Andorra",42.51,1.52],
+["Luanda","Angola",-8.84,13.23],["Saint John's","Antigua and Barbuda",17.12,-61.85],["Buenos Aires","Argentina",-34.61,-58.38],["Yerevan","Armenia",40.18,44.51],
+["Canberra","Australia",-35.28,149.13],["Vienna","Austria",48.21,16.37],["Baku","Azerbaijan",40.41,49.87],["Nassau","Bahamas",25.06,-77.34],
+["Manama","Bahrain",26.23,50.59],["Dhaka","Bangladesh",23.81,90.41],["Bridgetown","Barbados",13.10,-59.62],["Minsk","Belarus",53.90,27.57],
+["Brussels","Belgium",50.85,4.35],["Belmopan","Belize",17.25,-88.77],["Porto-Novo","Benin",6.50,2.62],["Thimphu","Bhutan",27.47,89.64],
+["La Paz","Bolivia",-16.49,-68.13],["Sarajevo","Bosnia and Herzegovina",43.87,18.41],["Gaborone","Botswana",-24.63,25.91],["Brasília","Brazil",-15.79,-47.88],
+["Bandar Seri Begawan","Brunei",4.89,114.94],["Sofia","Bulgaria",42.70,23.32],["Ouagadougou","Burkina Faso",12.37,-1.52],["Gitega","Burundi",-3.43,29.93],
+["Phnom Penh","Cambodia",11.56,104.92],["Yaoundé","Cameroon",3.85,11.50],["Ottawa","Canada",45.42,-75.70],["Praia","Cape Verde",14.93,-23.51],
+["Bangui","Central African Republic",4.39,18.56],["N'Djamena","Chad",12.13,15.06],["Santiago","Chile",-33.45,-70.67],["Beijing","China",39.90,116.41],
+["Bogotá","Colombia",4.71,-74.07],["Moroni","Comoros",-11.70,43.26],["Brazzaville","Congo (Republic)",-4.26,15.24],["Kinshasa","Congo (DR)",-4.32,15.31],
+["San José","Costa Rica",9.93,-84.08],["Yamoussoukro","Côte d'Ivoire",6.83,-5.29],["Zagreb","Croatia",45.81,15.98],["Havana","Cuba",23.11,-82.37],
+["Nicosia","Cyprus",35.19,33.38],["Prague","Czechia",50.09,14.42],["Copenhagen","Denmark",55.68,12.57],["Djibouti","Djibouti",11.59,43.15],
+["Roseau","Dominica",15.30,-61.39],["Santo Domingo","Dominican Republic",18.49,-69.93],["Quito","Ecuador",-0.18,-78.47],["Cairo","Egypt",30.04,31.24],
+["San Salvador","El Salvador",13.69,-89.19],["Malabo","Equatorial Guinea",3.75,8.78],["Asmara","Eritrea",15.34,38.93],["Tallinn","Estonia",59.44,24.75],
+["Mbabane","Eswatini",-26.32,31.14],["Addis Ababa","Ethiopia",9.03,38.74],["Suva","Fiji",-18.14,178.44],["Helsinki","Finland",60.17,24.94],
+["Paris","France",48.85,2.35],["Libreville","Gabon",0.42,9.47],["Banjul","Gambia",13.45,-16.58],["Tbilisi","Georgia",41.72,44.79],
+["Berlin","Germany",52.52,13.40],["Accra","Ghana",5.60,-0.19],["Athens","Greece",37.98,23.73],["Saint George's","Grenada",12.06,-61.75],
+["Guatemala City","Guatemala",14.63,-90.51],["Conakry","Guinea",9.64,-13.58],["Bissau","Guinea-Bissau",11.86,-15.60],["Georgetown","Guyana",6.80,-58.16],
+["Port-au-Prince","Haiti",18.59,-72.31],["Tegucigalpa","Honduras",14.07,-87.19],["Budapest","Hungary",47.50,19.04],["Reykjavík","Iceland",64.15,-21.94],
+["New Delhi","India",28.61,77.21],["Jakarta","Indonesia",-6.21,106.85],["Tehran","Iran",35.69,51.39],["Baghdad","Iraq",33.31,44.36],
+["Dublin","Ireland",53.35,-6.26],["Jerusalem","Israel",31.77,35.21],["Rome","Italy",41.90,12.50],["Kingston","Jamaica",18.02,-76.80],
+["Tokyo","Japan",35.68,139.69],["Amman","Jordan",31.95,35.93],["Astana","Kazakhstan",51.17,71.45],["Nairobi","Kenya",-1.29,36.82],
+["Tarawa","Kiribati",1.45,172.98],["Pristina","Kosovo",42.66,21.17],["Kuwait City","Kuwait",29.38,47.99],["Bishkek","Kyrgyzstan",42.87,74.59],
+["Vientiane","Laos",17.97,102.60],["Riga","Latvia",56.95,24.11],["Beirut","Lebanon",33.89,35.50],["Maseru","Lesotho",-29.31,27.48],
+["Monrovia","Liberia",6.30,-10.80],["Tripoli","Libya",32.89,13.19],["Vaduz","Liechtenstein",47.14,9.52],["Vilnius","Lithuania",54.69,25.28],
+["Luxembourg","Luxembourg",49.61,6.13],["Antananarivo","Madagascar",-18.88,47.51],["Lilongwe","Malawi",-13.96,33.79],["Kuala Lumpur","Malaysia",3.14,101.69],
+["Malé","Maldives",4.18,73.51],["Bamako","Mali",12.64,-8.00],["Valletta","Malta",35.90,14.51],["Majuro","Marshall Islands",7.09,171.38],
+["Nouakchott","Mauritania",18.09,-15.98],["Port Louis","Mauritius",-20.16,57.50],["Mexico City","Mexico",19.43,-99.13],["Palikir","Micronesia",6.92,158.16],
+["Chișinău","Moldova",47.01,28.86],["Monaco","Monaco",43.74,7.42],["Ulaanbaatar","Mongolia",47.89,106.91],["Podgorica","Montenegro",42.44,19.26],
+["Rabat","Morocco",34.02,-6.83],["Maputo","Mozambique",-25.97,32.58],["Naypyidaw","Myanmar",19.76,96.08],["Windhoek","Namibia",-22.56,17.08],
+["Yaren","Nauru",-0.55,166.92],["Kathmandu","Nepal",27.72,85.32],["Amsterdam","Netherlands",52.37,4.90],["Wellington","New Zealand",-41.29,174.78],
+["Managua","Nicaragua",12.11,-86.24],["Niamey","Niger",13.51,2.11],["Abuja","Nigeria",9.08,7.40],["Pyongyang","North Korea",39.04,125.76],
+["Skopje","North Macedonia",41.99,21.43],["Oslo","Norway",59.91,10.75],["Muscat","Oman",23.59,58.41],["Islamabad","Pakistan",33.68,73.05],
+["Ngerulmud","Palau",7.50,134.62],["Ramallah","Palestine",31.90,35.20],["Panama City","Panama",8.98,-79.52],["Port Moresby","Papua New Guinea",-9.44,147.18],
+["Asunción","Paraguay",-25.28,-57.63],["Lima","Peru",-12.05,-77.04],["Manila","Philippines",14.60,120.98],["Warsaw","Poland",52.23,21.01],
+["Lisbon","Portugal",38.72,-9.14],["Doha","Qatar",25.29,51.53],["Bucharest","Romania",44.43,26.10],["Moscow","Russia",55.75,37.62],
+["Kigali","Rwanda",-1.94,30.06],["Basseterre","Saint Kitts and Nevis",17.30,-62.72],["Castries","Saint Lucia",14.01,-60.99],["Kingstown","Saint Vincent and the Grenadines",13.16,-61.22],
+["Apia","Samoa",-13.83,-171.77],["San Marino","San Marino",43.94,12.45],["São Tomé","Sao Tome and Principe",0.34,6.73],["Riyadh","Saudi Arabia",24.71,46.68],
+["Dakar","Senegal",14.72,-17.47],["Belgrade","Serbia",44.79,20.45],["Victoria","Seychelles",-4.62,55.45],["Freetown","Sierra Leone",8.48,-13.23],
+["Singapore","Singapore",1.35,103.82],["Bratislava","Slovakia",48.15,17.11],["Ljubljana","Slovenia",46.05,14.51],["Honiara","Solomon Islands",-9.43,159.96],
+["Mogadishu","Somalia",2.05,45.32],["Pretoria","South Africa",-25.75,28.19],["Seoul","South Korea",37.57,126.98],["Juba","South Sudan",4.85,31.58],
+["Madrid","Spain",40.42,-3.70],["Sri Jayawardenepura Kotte","Sri Lanka",6.90,79.92],["Khartoum","Sudan",15.50,32.56],["Paramaribo","Suriname",5.87,-55.17],
+["Stockholm","Sweden",59.33,18.07],["Bern","Switzerland",46.95,7.45],["Damascus","Syria",33.51,36.29],["Taipei","Taiwan",25.03,121.57],
+["Dushanbe","Tajikistan",38.56,68.79],["Dodoma","Tanzania",-6.16,35.75],["Bangkok","Thailand",13.75,100.50],["Dili","Timor-Leste",-8.56,125.56],
+["Lomé","Togo",6.13,1.22],["Nuku'alofa","Tonga",-21.14,-175.20],["Port of Spain","Trinidad and Tobago",10.65,-61.51],["Tunis","Tunisia",36.81,10.18],
+["Ankara","Turkey",39.93,32.87],["Ashgabat","Turkmenistan",37.95,58.38],["Funafuti","Tuvalu",-8.52,179.20],["Kampala","Uganda",0.35,32.58],
+["Kyiv","Ukraine",50.45,30.52],["Abu Dhabi","United Arab Emirates",24.45,54.38],["London","United Kingdom",51.51,-0.13],["Washington, D.C.","United States",38.91,-77.04],
+["Montevideo","Uruguay",-34.90,-56.19],["Tashkent","Uzbekistan",41.31,69.24],["Port Vila","Vanuatu",-17.73,168.32],["Vatican City","Vatican City",41.90,12.45],
+["Caracas","Venezuela",10.49,-66.88],["Hanoi","Vietnam",21.03,105.85],["Sana'a","Yemen",15.37,44.19],["Lusaka","Zambia",-15.42,28.28],
+["Harare","Zimbabwe",-17.83,31.05]
+].map(([c,n,lat,lng]) => ({ c, n, lat, lng, __dark:false }));
+
+/* ---------- subsolar point (where the Sun is directly overhead) ---------- */
+function getSunPosition(date){
+  const rad = Math.PI/180;
+  const now = date || new Date();
+  const jd = now.getTime()/86400000 + 2440587.5;
+  const n = jd - 2451545.0;                       // days since J2000.0
+  let L = (280.460 + 0.9856474*n) % 360;          // mean longitude
+  let g = (357.528 + 0.9856003*n) % 360;          // mean anomaly
+  if (L < 0) L += 360;
+  if (g < 0) g += 360;
+  const lambda = L + 1.915*Math.sin(g*rad) + 0.020*Math.sin(2*g*rad); // ecliptic longitude
+  const eps = 23.439 - 0.0000004*n;               // obliquity of the ecliptic
+  const dec = Math.asin(Math.sin(eps*rad)*Math.sin(lambda*rad))/rad;
+  let ra = Math.atan2(Math.cos(eps*rad)*Math.sin(lambda*rad), Math.cos(lambda*rad))/rad;
+  ra = (ra + 360) % 360;
+  let gmst = (280.46061837 + 360.98564736629*n) % 360; // Greenwich mean sidereal time
+  if (gmst < 0) gmst += 360;
+  let lng = ((ra - gmst) + 540) % 360 - 180;      // subsolar longitude
+  return [lng, dec];                              // [lng, lat]
+}
+
+function sunElevation(lat, lng, sun){
+  const d = Math.PI/180, [slng, slat] = sun;
+  return Math.asin(
+    Math.sin(lat*d)*Math.sin(slat*d) +
+    Math.cos(lat*d)*Math.cos(slat*d)*Math.cos((lng - slng)*d)
+  )/d;
+}
+const isDark = (lat, lng, sun) => sunElevation(lat, lng, sun) < -0.833;
+
+function nearestCapital(lat, lng){
+  const d = Math.PI/180;
+  let best = null, bestD = Infinity;
+  for (const c of CAPITALS){
+    const dLat = (c.lat - lat)*d;
+    const dLng = (c.lng - lng)*d;
+    const a = Math.sin(dLat/2)**2 +
+      Math.cos(lat*d)*Math.cos(c.lat*d)*Math.sin(dLng/2)**2;
+    const dist = 2*Math.asin(Math.sqrt(a));
+    if (dist < bestD){ bestD = dist; best = c; }
+  }
+  return best;
+}
+
+/* ---------- day / night globe shader (from the globe.gl day-night example) ---------- */
+const vertexShader = `
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  varying vec3 vViewDir;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vUv = uv;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vViewDir = normalize(-mv.xyz);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+const fragmentShader = `
+  #define PI 3.141592653589793
+  uniform sampler2D dayTexture;
+  uniform sampler2D nightTexture;
+  uniform sampler2D waterTexture;
+  uniform float hasWater;
+  uniform vec2 sunPosition;
+  uniform vec2 globeRotation;
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  varying vec3 vViewDir;
+
+  float toRad(in float a) { return a * PI / 180.0; }
+
+  vec3 Polar2Cartesian(in vec2 c) { // [lng, lat]
+    float theta = toRad(90.0 - c.x);
+    float phi = toRad(90.0 - c.y);
+    return vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta));
+  }
+
+  void main() {
+    float invLon = toRad(globeRotation.x);
+    float invLat = -toRad(globeRotation.y);
+    mat3 rotX = mat3(1, 0, 0, 0, cos(invLat), -sin(invLat), 0, sin(invLat), cos(invLat));
+    mat3 rotY = mat3(cos(invLon), 0, sin(invLon), 0, 1, 0, -sin(invLon), 0, cos(invLon));
+
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(rotX * rotY * Polar2Cartesian(sunPosition));
+    vec3 V = normalize(vViewDir);
+
+    float intensity = dot(N, L);
+    float blendFactor = smoothstep(-0.12, 0.12, intensity);
+
+    vec3 dayColor = texture2D(dayTexture, vUv).rgb;
+    vec3 nightColor = texture2D(nightTexture, vUv).rgb * vec3(0.85, 0.95, 1.35) * 1.15;
+
+    // warm the terminator, cool the deep day
+    vec3 warm = mix(vec3(1.0, 0.72, 0.45), vec3(1.0), smoothstep(0.0, 0.35, intensity));
+    dayColor *= mix(vec3(1.0), warm, smoothstep(-0.05, 0.25, intensity) * (1.0 - smoothstep(0.25, 0.6, intensity)));
+
+    vec3 color = mix(nightColor, dayColor, blendFactor);
+
+    // sun glint on oceans
+    if (hasWater > 0.5) {
+      float water = texture2D(waterTexture, vUv).r;
+      vec3 H = normalize(L + V);
+      float spec = pow(max(dot(N, H), 0.0), 90.0);
+      color += spec * water * blendFactor * vec3(1.0, 0.93, 0.78) * 0.9;
+    }
+
+    // blue atmospheric rim on the lit limb
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+    color += fres * blendFactor * vec3(0.18, 0.4, 0.75) * 0.6;
+
+    // gentle exposure / contrast so the Blue Marble map reads richly
+    color = pow(color, vec3(0.92)) * 1.06;
+
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
+
+/* ---------- drifting cloud layer (same day/night lighting) ---------- */
+const cloudVertexShader = `
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  void main() {
+    vNormal = normalize(normalMatrix * normal);
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const cloudFragmentShader = `
+  #define PI 3.141592653589793
+  uniform sampler2D cloudTexture;
+  uniform vec2 sunPosition;
+  uniform vec2 globeRotation;
+  varying vec3 vNormal;
+  varying vec2 vUv;
+  float toRad(in float a) { return a * PI / 180.0; }
+  vec3 P2C(in vec2 c) {
+    float t = toRad(90.0 - c.x);
+    float p = toRad(90.0 - c.y);
+    return vec3(sin(p) * cos(t), cos(p), sin(p) * sin(t));
+  }
+  void main() {
+    float lon = toRad(globeRotation.x);
+    float lat = -toRad(globeRotation.y);
+    mat3 rx = mat3(1.0, 0.0, 0.0, 0.0, cos(lat), -sin(lat), 0.0, sin(lat), cos(lat));
+    mat3 ry = mat3(cos(lon), 0.0, sin(lon), 0.0, 1.0, 0.0, -sin(lon), 0.0, cos(lon));
+    vec3 N = normalize(vNormal);
+    vec3 L = normalize(rx * ry * P2C(sunPosition));
+    float lit = smoothstep(-0.35, 0.25, dot(N, L));
+    float c = texture2D(cloudTexture, vUv).r;
+    vec3 col = mix(vec3(0.30, 0.36, 0.50), vec3(1.0), lit);
+    gl_FragColor = vec4(col, c * mix(0.05, 0.9, lit));
+  }
+`;
+
+/* ---------- build the globe ---------- */
+const el = id => document.getElementById(id);
+let material = null;
+let cloudMesh = null;
+
+const world = new Globe(el('globeViz'), {
+    controlType: 'orbit',
+    rendererConfig: { antialias: true, alpha: false, powerPreference: 'high-performance' }
+  })
+  .backgroundImageUrl('https://unpkg.com/three-globe/example/img/night-sky.png')
+  .showAtmosphere(true)
+  .atmosphereColor('#8fbcff')
+  .atmosphereAltitude(0.19)
+  .onZoom(pov => { if (material) material.uniforms.globeRotation.value.set(pov.lng, pov.lat); })
+  // capitals as clickable points
+  .pointsData(CAPITALS)
+  .pointLat('lat').pointLng('lng')
+  .pointColor(d => d.__dark ? '#7aa2ff' : '#ffd23f')
+  .pointAltitude(0.012)
+  .pointRadius(0.28)
+  .pointResolution(6)
+  .pointLabel(d => {
+    const wx = (d.wx && d.wx.code != null)
+      ? `<span style="color:#9aa6bd;font-weight:400"><br>${WX_EMOJI[kindOf(d.wx.code)]} ${d.wx.temp != null ? Math.round(d.wx.temp) + '°C' : ''}</span>` : '';
+    return `<div style="font:600 12px -apple-system,sans-serif;background:rgba(10,14,22,.9);border:1px solid rgba(255,255,255,.15);padding:4px 8px;border-radius:6px;color:#fff">${d.c}<span style="color:#9aa6bd;font-weight:400"> · ${d.n}</span>${wx}</div>`;
+  })
+  .onPointClick(d => selectLocation(d))
+  // capital name labels (toggle)
+  .labelsData([])
+  .labelLat('lat').labelLng('lng')
+  .labelText('c')
+  .labelSize(0.5)
+  .labelDotRadius(0.15)
+  .labelColor(() => 'rgba(255,255,255,.7)')
+  .labelResolution(1)
+  .onLabelClick(d => selectLocation(d))
+  // selection ring
+  .ringsData([])
+  .ringColor(() => t => `rgba(255,210,63,${1 - t})`)
+  .ringMaxRadius(4)
+  .ringPropagationSpeed(1.6)
+  .ringRepeatPeriod(1300)
+  // the "Sun overhead" marker
+  .htmlElementsData([])
+  .htmlLat('lat').htmlLng('lng')
+  .htmlAltitude(0.02)
+  .htmlElement(() => { const s = document.createElement('div'); s.className = 'sun-marker'; s.textContent = '☀️'; s.title = 'The Sun is directly overhead here'; return s; })
+  // click anywhere -> nearest capital
+  .onGlobeClick(({ lat, lng }) => selectLocation(nearestCapital(lat, lng)));
+
+world.pointOfView({ altitude: 2.6 });
+
+const controls = world.controls();
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.35;
+controls.minDistance = 180;
+
+/* ---------- HD textures + shader material ---------- */
+const renderer = world.renderer();
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+const maxAniso = renderer.capabilities.getMaxAnisotropy();
+
+const loader = new THREE.TextureLoader();
+loader.setCrossOrigin('anonymous');
+
+const GH = 'https://cdn.jsdelivr.net/gh/turban/webgl-earth@master/images/';
+const UNPKG = 'https://unpkg.com/three-globe/example/img/';
+
+// resolve with the first URL that loads; reject only if every source fails
+function loadFirst(urls){
+  return new Promise((resolve, reject) => {
+    let i = 0;
+    (function next(){
+      if (i >= urls.length) return reject(new Error('no source loaded: ' + urls[0]));
+      loader.load(urls[i++], resolve, undefined, next);
+    })();
+  });
+}
+function prep(tex){
+  // keep raw texel values (tone-matched to the globe.gl day/night example); just sharpen
+  tex.anisotropy = maxAniso;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// day map: 4K NASA "Blue Marble Next Generation", falling back to the bundled 2K map
+Promise.all([
+  loadFirst([GH + '2_no_clouds_4k.jpg', UNPKG + 'earth-blue-marble.jpg', UNPKG + 'earth-day.jpg']),
+  loadFirst([UNPKG + 'earth-night.jpg'])
+]).then(([day, night]) => {
+  prep(day); prep(night);
+  material = new THREE.ShaderMaterial({
+    uniforms: {
+      dayTexture:    { value: day },
+      nightTexture:  { value: night },
+      waterTexture:  { value: day },
+      hasWater:      { value: 0 },
+      sunPosition:   { value: new THREE.Vector2() },
+      globeRotation: { value: new THREE.Vector2() }
+    },
+    vertexShader, fragmentShader
+  });
+  world.globeMaterial(material);
+  const pov = world.pointOfView();
+  material.uniforms.globeRotation.value.set(pov.lng, pov.lat);
+  updateDayNight();
+  el('loading').classList.add('hidden');
+
+  // ocean sun-glint mask
+  loadFirst([GH + 'water_4k.png'])
+    .then(w => { prep(w); material.uniforms.waterTexture.value = w; material.uniforms.hasWater.value = 1; })
+    .catch(() => {});
+}).catch(err => {
+  console.error('texture load failed', err);
+  world.globeImageUrl(UNPKG + 'earth-day.jpg').bumpImageUrl(UNPKG + 'earth-topology.png');
+  updateDayNight();
+  el('loading').classList.add('hidden');
+});
+
+/* ---------- country borders (nice-to-have, loaded from CDN) ---------- */
+fetch('https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_admin_0_countries.geojson')
+  .then(r => r.json())
+  .then(geo => {
+    world
+      .polygonsData(geo.features)
+      .polygonCapColor(() => 'rgba(255,255,255,0)')
+      .polygonSideColor(() => 'rgba(0,0,0,0)')
+      .polygonStrokeColor(() => 'rgba(120,170,255,.4)')
+      .polygonAltitude(0.006)
+      .polygonLabel(({ properties: p }) => `<div style="font:600 12px -apple-system,sans-serif;background:rgba(10,14,22,.9);border:1px solid rgba(255,255,255,.15);padding:4px 8px;border-radius:6px;color:#fff">${p.NAME || p.ADMIN || p.name}</div>`)
+      .onPolygonHover(hoverD => world
+        .polygonAltitude(d => d === hoverD ? 0.02 : 0.006)
+        .polygonStrokeColor(d => d === hoverD ? '#ffd23f' : 'rgba(120,170,255,.4)'))
+      .onPolygonClick((d, ev, coords) => selectLocation(nearestCapital(coords.lat, coords.lng)));
+  })
+  .catch(err => console.warn('country borders unavailable', err));
+
+/* ---------- day / night bookkeeping ---------- */
+const sunMarker = { lat: 0, lng: 0 };
+function updateDayNight(){
+  const sun = getSunPosition(new Date());
+  if (material) material.uniforms.sunPosition.value.set(sun[0], sun[1]);
+  sunMarker.lat = sun[1]; sunMarker.lng = sun[0];
+  world.htmlElementsData([sunMarker]);
+
+  let dark = 0;
+  for (const c of CAPITALS){ c.__dark = isDark(c.lat, c.lng, sun); if (c.__dark) dark++; }
+  applyPointStyle();
+  if (tNamesOn) world.labelsData(CAPITALS.slice());
+  el('nDark').textContent = dark;
+  el('nDay').textContent = CAPITALS.length - dark;
+}
+setInterval(updateDayNight, 60000);
+
+/* ---------- UTC clock ---------- */
+setInterval(() => { el('utcClock').textContent = new Date().toISOString().slice(11, 19); }, 1000);
+el('utcClock').textContent = new Date().toISOString().slice(11, 19);
+
+/* ---------- toggles ---------- */
+el('tRotate').addEventListener('change', e => { controls.autoRotate = e.target.checked; });
+
+let cloudsRequested = false;
+function ensureClouds(){
+  if (cloudsRequested || !material) return;
+  cloudsRequested = true;
+  loadFirst([GH + 'fair_clouds_4k.png']).then(clouds => {
+    prep(clouds);
+    const cloudMat = new THREE.ShaderMaterial({
+      uniforms: {
+        cloudTexture:  { value: clouds },
+        sunPosition:   material.uniforms.sunPosition,     // shared refs — stay in sync
+        globeRotation: material.uniforms.globeRotation
+      },
+      vertexShader: cloudVertexShader,
+      fragmentShader: cloudFragmentShader,
+      transparent: true,
+      depthWrite: false
+    });
+    cloudMesh = new THREE.Mesh(new THREE.SphereGeometry(world.getGlobeRadius() * 1.01, 96, 96), cloudMat);
+    cloudMesh.visible = el('tClouds').checked;
+    world.scene().add(cloudMesh);
+    (function drift(){
+      if (cloudMesh.visible) cloudMesh.rotation.y += 0.00028;
+      requestAnimationFrame(drift);
+    })();
+  }).catch(() => { cloudsRequested = false; });
+}
+el('tClouds').addEventListener('change', e => {
+  if (e.target.checked) ensureClouds();
+  if (cloudMesh) cloudMesh.visible = e.target.checked;
+});
+let tNamesOn = false;
+el('tNames').addEventListener('change', e => {
+  tNamesOn = e.target.checked;
+  world.labelsData(tNamesOn ? CAPITALS.slice() : []);
+});
+
+/* ---------- location detail panel ---------- */
+const WMO = {
+  0:['Clear sky','☀️'],1:['Mainly clear','🌤️'],2:['Partly cloudy','⛅'],3:['Overcast','☁️'],
+  45:['Fog','🌫️'],48:['Rime fog','🌫️'],
+  51:['Light drizzle','🌦️'],53:['Drizzle','🌦️'],55:['Dense drizzle','🌧️'],
+  56:['Freezing drizzle','🌧️'],57:['Freezing drizzle','🌧️'],
+  61:['Light rain','🌦️'],63:['Rain','🌧️'],65:['Heavy rain','🌧️'],
+  66:['Freezing rain','🌧️'],67:['Freezing rain','🌧️'],
+  71:['Light snow','🌨️'],73:['Snow','🌨️'],75:['Heavy snow','❄️'],77:['Snow grains','🌨️'],
+  80:['Rain showers','🌦️'],81:['Rain showers','🌧️'],82:['Violent showers','⛈️'],
+  85:['Snow showers','🌨️'],86:['Heavy snow showers','❄️'],
+  95:['Thunderstorm','⛈️'],96:['Thunderstorm, hail','⛈️'],99:['Thunderstorm, hail','⛈️']
+};
+const compass = deg => ['N','NE','E','SE','S','SW','W','NW'][Math.round(deg/45)%8];
+
+// group a WMO code into a visual weather kind
+function kindOf(code){
+  if (code == null) return 'clear';
+  if (code >= 95) return 'storm';
+  if (code >= 80 && code <= 86) return 'showers';
+  if ((code >= 51 && code <= 67) ) return 'rain';
+  if (code >= 71 && code <= 77) return 'snow';
+  if (code === 45 || code === 48) return 'fog';
+  if (code === 3) return 'cloud';
+  if (code === 2) return 'partly';
+  return 'clear'; // 0, 1
+}
+const WX_COLOR = {
+  clear:'#ffd23f', partly:'#ffe08a', cloud:'#9fb0c6', fog:'#c7ccd4',
+  rain:'#49a6ff', showers:'#2e86ff', snow:'#eaf4ff', storm:'#b98cff'
+};
+const WX_EMOJI = { clear:'☀️', partly:'⛅', cloud:'☁️', fog:'🌫️', rain:'🌧️', showers:'🌦️', snow:'🌨️', storm:'⛈️' };
+
+/* ---------- animated weather scene in the panel banner ---------- */
+const WeatherFX = (() => {
+  const cv = el('pFx'), ctx = cv.getContext('2d');
+  const DPR = Math.min(2, window.devicePixelRatio || 1);
+  let raf = 0, kind = 'clear', day = true, parts = [], stars = [], W = 1, H = 1;
+  let last = 0, flash = 0, nextFlash = 2, bolt = null, running = false;
+
+  function size(){
+    const r = cv.getBoundingClientRect();
+    W = cv.width = Math.max(1, Math.round((r.width || 300) * DPR));
+    H = cv.height = Math.max(1, Math.round((r.height || 132) * DPR));
+  }
+  function rnd(a, b){ return a + Math.random() * (b - a); }
+
+  function seed(){
+    parts = []; stars = [];
+    let n = 0;
+    if (kind === 'rain') n = 120;
+    else if (kind === 'showers' || kind === 'storm') n = 180;
+    else if (kind === 'snow') n = 70;
+    else if (kind === 'cloud' || kind === 'fog') n = 7;
+    else if (kind === 'partly') n = 3;
+    for (let i = 0; i < n; i++) parts.push(mk(true));
+    if (!day) for (let i = 0; i < 40; i++) stars.push({ x: rnd(0, W), y: rnd(0, H * 0.8), a: rnd(0.2, 0.9), t: rnd(0, 6.28) });
+  }
+  function mk(spread){
+    if (kind === 'snow')
+      return { x: rnd(0, W), y: spread ? rnd(0, H) : -10 * DPR, r: rnd(1.4, 4) * DPR,
+               vy: rnd(14, 42) * DPR, ph: rnd(0, 6.28), amp: rnd(8, 22) * DPR };
+    if (kind === 'cloud' || kind === 'fog' || kind === 'partly')
+      return { x: rnd(0, W), y: rnd(H * 0.12, H * 0.82), r: rnd(kind === 'fog' ? 46 : 30, 90) * DPR,
+               vx: rnd(5, 16) * DPR, op: rnd(0.5, 0.9) };
+    const fast = kind === 'storm' || kind === 'showers';
+    return { x: rnd(-W * 0.15, W * 1.15), y: spread ? rnd(0, H) : -20 * DPR, len: rnd(9, 22) * DPR,
+             vy: rnd(fast ? 620 : 430, fast ? 980 : 700) * DPR, vx: (fast ? 190 : 90) * DPR };
+  }
+  function makeBolt(){
+    const x0 = rnd(W * 0.25, W * 0.75); let x = x0, y = 0; const pts = [[x, y]];
+    while (y < H * 0.8){ y += rnd(10, 26) * DPR; x += rnd(-24, 24) * DPR; pts.push([x, y]); }
+    return pts;
+  }
+
+  function sky(){
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    if (kind === 'storm'){ g.addColorStop(0, '#20222b'); g.addColorStop(1, '#3a4150'); }
+    else if (!day){ g.addColorStop(0, '#08122c'); g.addColorStop(1, '#152a52'); }
+    else if (kind === 'clear'){ g.addColorStop(0, '#2f7fc4'); g.addColorStop(1, '#a9d6f1'); }
+    else if (kind === 'partly'){ g.addColorStop(0, '#4385bd'); g.addColorStop(1, '#bcd6e7'); }
+    else if (kind === 'fog'){ g.addColorStop(0, '#8b96a4'); g.addColorStop(1, '#c4cbd4'); }
+    else { g.addColorStop(0, '#4a5a6d'); g.addColorStop(1, '#828f9d'); }
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  function blob(x, y, r, fill){
+    ctx.fillStyle = fill;
+    for (const [dx, dy, s] of [[0,0,1],[-0.6,0.15,0.75],[0.6,0.18,0.72],[-0.28,-0.35,0.6],[0.32,-0.3,0.62]]){
+      ctx.beginPath(); ctx.arc(x + dx * r, y + dy * r, r * s, 0, 6.2832); ctx.fill();
+    }
+  }
+  function celestial(t){
+    if (kind !== 'clear' && kind !== 'partly') return;
+    const cx = W * 0.75, cy = H * 0.34, R = Math.min(W, H) * 0.17;
+    if (day){
+      const gr = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 3);
+      gr.addColorStop(0, 'rgba(255,241,190,0.95)');
+      gr.addColorStop(0.4, 'rgba(255,214,92,0.55)');
+      gr.addColorStop(1, 'rgba(255,214,92,0)');
+      ctx.fillStyle = gr; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#fff3c4'; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.2832); ctx.fill();
+    } else {
+      for (const s of stars){
+        ctx.fillStyle = 'rgba(255,255,255,' + (s.a * (0.6 + 0.4 * Math.sin(t * 2 + s.t))).toFixed(3) + ')';
+        ctx.fillRect(s.x, s.y, 2 * DPR, 2 * DPR);
+      }
+      ctx.fillStyle = '#eef1f8';
+      ctx.beginPath(); ctx.arc(cx, cy, R, 0, 6.2832); ctx.fill();
+      ctx.save(); ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath(); ctx.arc(cx + R * 0.55, cy - R * 0.28, R, 0, 6.2832); ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function frame(ts){
+    if (!running) return;
+    const dt = Math.min(0.05, (ts - last) / 1000 || 0.016); last = ts;
+    const t = ts / 1000;
+    sky();
+    celestial(t);
+
+    if (kind === 'cloud' || kind === 'fog' || kind === 'partly'){
+      for (const p of parts){
+        p.x += p.vx * dt; if (p.x - p.r > W) { p.x = -p.r; p.y = rnd(H * 0.12, H * 0.82); }
+        const shade = kind === 'fog' ? 'rgba(224,228,234,' + (p.op * 0.5) + ')'
+          : (day ? 'rgba(244,247,251,' + p.op + ')' : 'rgba(120,134,158,' + p.op + ')');
+        blob(p.x, p.y, p.r, shade);
+      }
+      if (kind === 'fog'){
+        for (let i = 0; i < 4; i++){
+          ctx.fillStyle = 'rgba(216,221,228,0.16)';
+          const yy = H * (0.25 + i * 0.2) + Math.sin(t * 0.6 + i) * 6 * DPR;
+          ctx.fillRect(0, yy, W, 14 * DPR);
+        }
+      }
+    }
+
+    if (kind === 'rain' || kind === 'showers' || kind === 'storm'){
+      ctx.strokeStyle = day ? 'rgba(200,220,255,0.55)' : 'rgba(170,195,240,0.5)';
+      ctx.lineWidth = 1.3 * DPR; ctx.beginPath();
+      for (const p of parts){
+        p.y += p.vy * dt; p.x += p.vx * dt;
+        if (p.y > H){ p.y = -20 * DPR; p.x = rnd(-W * 0.15, W * 1.15); }
+        const k = p.len / p.vy * p.vx;
+        ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - k, p.y - p.len);
+      }
+      ctx.stroke();
+    }
+
+    if (kind === 'snow'){
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      for (const p of parts){
+        p.y += p.vy * dt; p.x += Math.sin(t + p.ph) * p.amp * dt;
+        if (p.y > H){ p.y = -10 * DPR; p.x = rnd(0, W); }
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.2832); ctx.fill();
+      }
+    }
+
+    if (kind === 'storm'){
+      nextFlash -= dt;
+      if (nextFlash <= 0){ flash = 1; bolt = makeBolt(); nextFlash = rnd(1.4, 4.5); }
+      flash = Math.max(0, flash - dt * 3.2);
+      if (flash > 0){
+        ctx.fillStyle = 'rgba(255,255,255,' + (flash * 0.5).toFixed(3) + ')';
+        ctx.fillRect(0, 0, W, H);
+        if (bolt && flash > 0.35){
+          ctx.strokeStyle = 'rgba(255,255,255,' + Math.min(1, flash + 0.2).toFixed(3) + ')';
+          ctx.lineWidth = 2.2 * DPR; ctx.beginPath();
+          ctx.moveTo(bolt[0][0], bolt[0][1]);
+          for (const [x, y] of bolt) ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+      }
+    }
+    raf = requestAnimationFrame(frame);
+  }
+
+  function start(){
+    if (running) return;
+    running = true; last = performance.now();
+    size(); seed();
+    raf = requestAnimationFrame(frame);
+  }
+  function stop(){
+    running = false; cancelAnimationFrame(raf);
+    ctx.clearRect(0, 0, W, H);
+  }
+  return {
+    set(code, isDay){
+      kind = kindOf(code); day = isDay !== false;
+      if (running){ size(); seed(); } else start();
+    },
+    start, stop,
+    resize(){ if (running){ size(); seed(); } }
+  };
+})();
+
+/* ---------- global "weather map" layer ---------- */
+let wxOn = false, wxTimer = null, wxLoading = false;
+let wxGroup = null, wxRain = null, wxSnow = null, wxIcons = [], wxRainP = [], wxSnowP = [], wxRAF = 0, wxLastT = 0;
+const wxSpriteTex = {}, wxSpriteMat = {};
+const GLOBE_R = (world.getGlobeRadius && world.getGlobeRadius()) || 100;
+
+// polar -> cartesian, matching three-globe's own mapping so markers sit on the capitals
+function gcoord(lat, lng, alt){
+  const phi = (90 - lat) * Math.PI / 180, theta = (90 - lng) * Math.PI / 180;
+  const r = GLOBE_R * (1 + (alt || 0));
+  return new THREE.Vector3(r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
+}
+function emojiTex(ch){
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d');
+  x.font = '46px serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.shadowColor = 'rgba(0,0,0,.55)'; x.shadowBlur = 4;
+  x.fillText(ch, 32, 36);
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
+  return t;
+}
+function spriteMat(kind){
+  if (!wxSpriteTex[kind]) wxSpriteTex[kind] = emojiTex(WX_EMOJI[kind]);
+  if (!wxSpriteMat[kind]) wxSpriteMat[kind] = new THREE.SpriteMaterial({ map: wxSpriteTex[kind], transparent: true, depthWrite: false });
+  wxSpriteMat[kind].opacity = 1;
+  return wxSpriteMat[kind];
+}
+
+function buildWxGlobe(){
+  cancelAnimationFrame(wxRAF);
+  if (wxGroup){
+    world.scene().remove(wxGroup);
+    if (wxRain){ wxRain.geometry.dispose(); wxRain.material.dispose(); }
+    if (wxSnow){ wxSnow.geometry.dispose(); wxSnow.material.dispose(); }
+  }
+  wxGroup = null; wxRain = wxSnow = null; wxIcons = []; wxRainP = []; wxSnowP = [];
+  if (!wxOn) return;
+
+  const cities = CAPITALS.filter(c => c.wx && c.wx.code != null);
+  if (!cities.length) return;
+
+  wxGroup = new THREE.Group();
+  const ICON_KINDS = new Set(['rain', 'showers', 'storm', 'snow', 'fog']);
+  const basis = new Map();
+  for (const c of cities){
+    const P = gcoord(c.lat, c.lng, 0);
+    const up = P.clone().normalize();
+    const ref = Math.abs(up.y) > 0.99 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const east = new THREE.Vector3().crossVectors(ref, up).normalize();
+    const north = new THREE.Vector3().crossVectors(up, east).normalize();
+    basis.set(c, { P, up, east, north });
+
+    const kind = kindOf(c.wx.code);
+    if (!ICON_KINDS.has(kind)) continue;                 // only flag the interesting weather
+    const spr = new THREE.Sprite(spriteMat(kind));
+    const s = GLOBE_R * 0.055; spr.scale.set(s, s, 1);
+    spr.position.copy(P).addScaledVector(up, GLOBE_R * 0.045);
+    spr.userData.kind = kind;
+    wxGroup.add(spr); wxIcons.push(spr);
+  }
+
+  const rainCities = cities.filter(c => ['rain', 'showers', 'storm'].includes(kindOf(c.wx.code)));
+  if (rainCities.length){
+    for (const c of rainCities){
+      const k = kindOf(c.wx.code), per = k === 'rain' ? 11 : 18, b = basis.get(c);
+      for (let i = 0; i < per; i++) wxRainP.push({
+        b, jE: (Math.random() * 2 - 1) * GLOBE_R * 0.028, jN: (Math.random() * 2 - 1) * GLOBE_R * 0.028,
+        phase: Math.random(), speed: 0.55 + Math.random() * 0.5, len: GLOBE_R * (0.014 + Math.random() * 0.01)
+      });
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wxRainP.length * 6), 3));
+    wxRain = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xbcd8ff, transparent: true, opacity: 0.6, depthWrite: false }));
+    wxRain.frustumCulled = false;
+    wxGroup.add(wxRain);
+  }
+
+  const snowCities = cities.filter(c => kindOf(c.wx.code) === 'snow');
+  if (snowCities.length){
+    for (const c of snowCities){
+      const b = basis.get(c);
+      for (let i = 0; i < 13; i++) wxSnowP.push({
+        b, jE: (Math.random() * 2 - 1) * GLOBE_R * 0.032, jN: (Math.random() * 2 - 1) * GLOBE_R * 0.032,
+        phase: Math.random(), speed: 0.28 + Math.random() * 0.22, wob: Math.random() * 6.28
+      });
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(wxSnowP.length * 3), 3));
+    wxSnow = new THREE.Points(geo, new THREE.PointsMaterial({ color: 0xffffff, size: GLOBE_R * 0.011, transparent: true, opacity: 0.9, depthWrite: false }));
+    wxSnow.frustumCulled = false;
+    wxGroup.add(wxSnow);
+  }
+
+  world.scene().add(wxGroup);
+  wxLastT = performance.now();
+  wxRAF = requestAnimationFrame(wxTick);
+}
+
+function wxTick(ts){
+  const dt = Math.min(0.05, (ts - wxLastT) / 1000 || 0.016); wxLastT = ts;
+  const time = ts / 1000;
+
+  if (wxRain){
+    const a = wxRain.geometry.attributes.position.array; let o = 0;
+    for (const p of wxRainP){
+      p.phase = (p.phase + p.speed * dt) % 1;
+      const alt = 0.058 * (1 - p.phase) * GLOBE_R;
+      const { P, up, east, north } = p.b;
+      const bx = P.x + up.x * alt + east.x * p.jE + north.x * p.jN;
+      const by = P.y + up.y * alt + east.y * p.jE + north.y * p.jN;
+      const bz = P.z + up.z * alt + east.z * p.jE + north.z * p.jN;
+      a[o++] = bx; a[o++] = by; a[o++] = bz;
+      a[o++] = bx + up.x * p.len; a[o++] = by + up.y * p.len; a[o++] = bz + up.z * p.len;
+    }
+    wxRain.geometry.attributes.position.needsUpdate = true;
+  }
+  if (wxSnow){
+    const a = wxSnow.geometry.attributes.position.array; let o = 0;
+    for (const p of wxSnowP){
+      p.phase = (p.phase + p.speed * dt) % 1;
+      const alt = 0.05 * (1 - p.phase) * GLOBE_R;
+      const w = Math.sin(time * 1.6 + p.wob) * GLOBE_R * 0.01;
+      const { P, up, east, north } = p.b;
+      a[o++] = P.x + up.x * alt + east.x * (p.jE + w) + north.x * p.jN;
+      a[o++] = P.y + up.y * alt + east.y * (p.jE + w) + north.y * p.jN;
+      a[o++] = P.z + up.z * alt + east.z * (p.jE + w) + north.z * p.jN;
+    }
+    wxSnow.geometry.attributes.position.needsUpdate = true;
+  }
+  if (wxSpriteMat.storm){
+    wxSpriteMat.storm.opacity = Math.random() < 0.05 ? 1 : 0.68 + Math.random() * 0.12;
+  }
+  wxRAF = requestAnimationFrame(wxTick);
+}
+
+function applyPointStyle(){
+  world.pointColor(d => {
+    if (wxOn && d.wx && d.wx.code != null) return WX_COLOR[kindOf(d.wx.code)] || '#9fb0c6';
+    return d.__dark ? '#7aa2ff' : '#ffd23f';
+  });
+  world.pointsData(CAPITALS.slice());
+}
+function updateWxLine(){
+  const line = el('wxLine');
+  if (!wxOn){ line.hidden = true; return; }
+  const tally = {};
+  for (const c of CAPITALS) if (c.wx && c.wx.code != null){ const k = kindOf(c.wx.code); tally[k] = (tally[k] || 0) + 1; }
+  const order = ['storm','showers','rain','snow','fog','cloud','partly','clear'];
+  const txt = order.filter(k => tally[k]).map(k => `${WX_EMOJI[k]} ${tally[k]}`).join('  ');
+  line.textContent = txt || (wxLoading ? 'loading world weather…' : 'no data');
+  line.hidden = false;
+}
+function fetchGlobalWx(){
+  wxLoading = true; updateWxLine();
+  const lat = CAPITALS.map(c => c.lat.toFixed(3)).join(',');
+  const lng = CAPITALS.map(c => c.lng.toFixed(3)).join(',');
+  fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=weather_code,temperature_2m,is_day&timezone=UTC`)
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(res => {
+      const list = Array.isArray(res) ? res : [res];
+      list.forEach((o, i) => {
+        const c = CAPITALS[i]; if (!c) return;
+        const cur = o.current || {};
+        c.wx = { code: cur.weather_code, temp: cur.temperature_2m, isDay: cur.is_day };
+      });
+      wxLoading = false;
+      if (wxOn){ applyPointStyle(); updateWxLine(); buildWxGlobe(); }
+    })
+    .catch(err => { console.warn('global weather failed', err); wxLoading = false; updateWxLine(); });
+}
+el('tWx').addEventListener('change', e => {
+  wxOn = e.target.checked;
+  if (wxOn){
+    if (!CAPITALS.some(c => c.wx)) fetchGlobalWx();
+    wxTimer = setInterval(fetchGlobalWx, 15 * 60 * 1000);
+  } else {
+    clearInterval(wxTimer); wxTimer = null;
+  }
+  applyPointStyle();
+  updateWxLine();
+  buildWxGlobe();
+});
+
+let clockTimer = null;
+let reqToken = 0;
+
+function selectLocation(cap){
+  if (!cap) return;
+  const token = ++reqToken;
+
+  el('panel').classList.add('open');
+  el('pCity').textContent = cap.c;
+  el('pCountry').textContent = cap.n;
+  el('pCoords').textContent = `${cap.lat.toFixed(2)}°, ${cap.lng.toFixed(2)}°`;
+  el('pWx').hidden = true;
+  el('pState').className = 'state';
+  el('pState').innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px"></span>Loading weather…';
+  el('fxTemp').textContent = '–';
+  el('fxIcon').textContent = '⏳';
+  el('fxText').textContent = 'Loading…';
+  WeatherFX.start();
+
+  world.ringsData([{ lat: cap.lat, lng: cap.lng }]);
+  world.pointOfView({ lat: cap.lat, lng: cap.lng, altitude: 1.7 }, 900);
+
+  const params = new URLSearchParams({
+    latitude: cap.lat, longitude: cap.lng,
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m',
+    wind_speed_unit: 'ms', timezone: 'auto'
+  });
+
+  fetch('https://api.open-meteo.com/v1/forecast?' + params)
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(data => {
+      if (token !== reqToken) return;               // a newer click superseded this one
+      const cur = data.current || {};
+      const night = cur.is_day === 0;
+
+      startClock(data.timezone, data.utc_offset_seconds);
+      const badge = el('pDayNight');
+      badge.textContent = night ? '🌙 Night' : '☀️ Daytime';
+      badge.className = 'badge ' + (night ? 'night' : 'day');
+
+      let [desc, icon] = WMO[cur.weather_code] || ['—','•'];
+      if (night && (cur.weather_code === 0 || cur.weather_code === 1)) icon = '🌙';
+
+      WeatherFX.set(cur.weather_code, !night);
+      el('fxTemp').textContent = fmtTemp(cur.temperature_2m);
+      el('fxIcon').textContent = icon;
+      el('fxText').textContent = desc;
+      el('pFeels').textContent = fmtTemp(cur.apparent_temperature);
+      el('pHum').textContent = cur.relative_humidity_2m != null ? cur.relative_humidity_2m + '%' : '–';
+      el('pWind').textContent = cur.wind_speed_10m != null
+        ? `${cur.wind_speed_10m.toFixed(1)} m/s ${compass(cur.wind_direction_10m || 0)}` : '–';
+      el('pPrecip').textContent = cur.precipitation != null ? cur.precipitation.toFixed(1) + ' mm' : '–';
+
+      el('pState').className = 'state';
+      el('pState').textContent = '';
+      el('pState').hidden = true;
+      el('pWx').hidden = false;
+    })
+    .catch(err => {
+      if (token !== reqToken) return;
+      console.error(err);
+      startClock(guessTz(cap.lng), cap.lng / 15 * 3600); // fall back to a longitude estimate
+      const badge = el('pDayNight');
+      const nightGuess = isDark(cap.lat, cap.lng, getSunPosition(new Date()));
+      badge.textContent = nightGuess ? '🌙 Night' : '☀️ Daytime';
+      badge.className = 'badge ' + (nightGuess ? 'night' : 'day');
+      WeatherFX.set(null, !nightGuess);
+      el('fxTemp').textContent = '–';
+      el('fxIcon').textContent = '⚠️';
+      el('fxText').textContent = 'Weather unavailable';
+      el('pState').hidden = false;
+      el('pState').className = 'state err';
+      el('pState').textContent = 'Weather unavailable (offline?). Local time is estimated from longitude.';
+      el('pWx').hidden = true;
+    });
+}
+
+function fmtTemp(v){ return v == null ? '–' : Math.round(v) + '°C'; }
+
+function startClock(tz, offsetSeconds){
+  clearInterval(clockTimer);
+  let fmtT, fmtD;
+  try {
+    fmtT = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    fmtD = new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'long', day: 'numeric', month: 'long' });
+  } catch(e){ tz = 'UTC'; offsetSeconds = 0; }
+
+  el('pTz').textContent = (tz && tz !== 'UTC' ? tz.replace(/_/g,' ') + ' · ' : '') + 'UTC' + fmtOffset(offsetSeconds);
+
+  const tick = () => {
+    const now = new Date();
+    if (fmtT){
+      el('pTime').textContent = fmtT.format(now);
+      el('pDate').textContent = fmtD.format(now);
+    } else {
+      const loc = new Date(now.getTime() + (offsetSeconds||0) * 1000);
+      el('pTime').textContent = loc.toISOString().slice(11, 19);
+      el('pDate').textContent = loc.toUTCString().slice(0, 16);
+    }
+  };
+  tick();
+  clockTimer = setInterval(tick, 1000);
+}
+
+function fmtOffset(sec){
+  if (sec == null) return '';
+  const s = sec < 0 ? '-' : '+';
+  sec = Math.abs(sec);
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+  return `${s}${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+function guessTz(lng){ return 'UTC'; }
+
+el('closePanel').addEventListener('click', () => {
+  el('panel').classList.remove('open');
+  world.ringsData([]);
+  clearInterval(clockTimer);
+  WeatherFX.stop();
+  reqToken++;
+});
+
+/* ---------- resize ---------- */
+addEventListener('resize', () => {
+  world.width(innerWidth).height(innerHeight);
+  WeatherFX.resize();
+});
+world.width(innerWidth).height(innerHeight);
+
+/* safety: hide the loader even if textures hang */
+setTimeout(() => el('loading').classList.add('hidden'), 9000);
+</script>
+</body>
+</html>
