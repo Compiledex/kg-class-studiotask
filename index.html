@@ -828,19 +828,24 @@ function gcoord(lat, lng, alt){
   return new THREE.Vector3(r * Math.sin(phi) * Math.cos(theta), r * Math.cos(phi), r * Math.sin(phi) * Math.sin(theta));
 }
 function emojiTex(ch){
-  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const S = 128;                                    // generous canvas so no glyph gets clipped
+  const c = document.createElement('canvas'); c.width = c.height = S;
   const x = c.getContext('2d');
-  x.font = '46px serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.shadowColor = 'rgba(0,0,0,.55)'; x.shadowBlur = 4;
-  x.fillText(ch, 32, 36);
-  const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
+  x.font = '82px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",serif';
+  x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.shadowColor = 'rgba(0,0,0,.5)'; x.shadowBlur = 6;
+  x.fillText(ch, S / 2, S / 2 + 2);
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 4; t.minFilter = THREE.LinearFilter; t.generateMipmaps = false;
   return t;
 }
 function makeSprite(key, ch){
   if (!wxSpriteTex[key]) wxSpriteTex[key] = emojiTex(ch);           // textures are shared
-  return new THREE.Sprite(new THREE.SpriteMaterial({                // material is per-icon (own opacity)
-    map: wxSpriteTex[key], transparent: true, depthWrite: false
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({           // material is per-icon (own opacity)
+    map: wxSpriteTex[key], transparent: true, depthWrite: false, depthTest: false
   }));
+  spr.renderOrder = 12;                                             // draw on top — globe never slices it
+  return spr;
 }
 // icon key + glyph for a capital, taking day/night into account for clear/partly skies
 function wxIcon(c){
@@ -966,7 +971,7 @@ function wxTick(ts){
       _pn.copy(s.position).normalize();
       _pd.copy(s.position).sub(cam.position).normalize();
       const facing = -_pn.dot(_pd);                         // 1 = square to camera, <=0 = limb / far side
-      s.userData.op = facing <= 0.18 ? 0 : Math.min(1, (facing - 0.18) / 0.32);
+      s.userData.op = Math.max(0, Math.min(1, (facing - 0.06) / 0.22));  // full across the visible face, fade only at the limb
       if (s.userData.op <= 0){ s.visible = false; continue; }
       _pp.copy(s.position).project(cam);
       s.userData.sx = (_pp.x * 0.5 + 0.5) * W;
