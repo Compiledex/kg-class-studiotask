@@ -513,13 +513,20 @@ loader.setCrossOrigin('anonymous');
 const GH = 'https://cdn.jsdelivr.net/gh/turban/webgl-earth@master/images/';
 const UNPKG = 'https://unpkg.com/three-globe/example/img/';
 
-// resolve with the first URL that loads; reject only if every source fails
-function loadFirst(urls){
+// resolve with the first URL that loads; move on if one errors or (optionally) stalls
+function loadFirst(urls, timeoutMs){
   return new Promise((resolve, reject) => {
-    let i = 0;
+    let i = 0, settled = false;
     (function next(){
-      if (i >= urls.length) return reject(new Error('no source loaded: ' + urls[0]));
-      loader.load(urls[i++], resolve, undefined, next);
+      if (settled) return;
+      if (i >= urls.length){ settled = true; return reject(new Error('no source loaded: ' + urls[0])); }
+      const url = urls[i++];
+      let t = timeoutMs ? setTimeout(() => { t = null; next(); }, timeoutMs) : null;
+      loader.load(url,
+        tex => { if (settled){ if (tex.dispose) tex.dispose(); return; } if (t) clearTimeout(t); settled = true; resolve(tex); },
+        undefined,
+        () => { if (t){ clearTimeout(t); t = null; } if (!settled) next(); }
+      );
     })();
   });
 }
@@ -533,9 +540,13 @@ function prep(tex){
   return tex;
 }
 
-// day map: 4K NASA "Blue Marble Next Generation", falling back to the bundled 2K map
+// day map: NASA GIBS "Blue Marble: Shaded Relief + Bathymetry" straight away
+// (small size first so it's quick), then sharpen it in the background
+const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?version=1.1.1&service=WMS&request=GetMap&srs=EPSG:4326&bbox=-180,-90,180,90&layers=BlueMarble_ShadedRelief_Bathymetry&styles=&format=image/jpeg&transparent=false';
+const gibs = px => `${GIBS}&width=${px}&height=${px / 2}`;
+
 Promise.all([
-  loadFirst([GH + '2_no_clouds_4k.jpg', UNPKG + 'earth-blue-marble.jpg', UNPKG + 'earth-day.jpg']),
+  loadFirst([gibs(2048), gibs(1024), GH + '2_no_clouds_4k.jpg', UNPKG + 'earth-day.jpg'], 14000),
   loadFirst([UNPKG + 'earth-night.jpg'])
 ]).then(([day, night]) => {
   prep(day); prep(night);
@@ -568,17 +579,13 @@ Promise.all([
     .then(b => { prep(b); material.uniforms.bumpTexture.value = b; material.uniforms.bumpScale.value = 1.6; })
     .catch(() => {});
 
-  // upgrade the day map to NASA's cloud-free "Blue Marble: Shaded Relief + Bathymetry" (GIBS, 8K)
-  const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?version=1.1.1&service=WMS&request=GetMap&srs=EPSG:4326&bbox=-180,-90,180,90&layers=BlueMarble_ShadedRelief_Bathymetry&styles=&format=image/jpeg&transparent=false';
-  loadFirst([GIBS + '&width=8192&height=4096', GIBS + '&width=4096&height=2048'])
-    .then(hd => {
-      prep(hd);
-      const prev = material.uniforms.dayTexture.value;
-      material.uniforms.dayTexture.value = hd;
-      if (material.uniforms.waterTexture.value === prev) material.uniforms.waterTexture.value = hd;
-      if (material.uniforms.bumpTexture.value === prev) material.uniforms.bumpTexture.value = hd;
-    })
-    .catch(() => {});
+  // quietly sharpen the same NASA map: 4K, then 8K
+  (function sharpen(sizes){
+    if (!sizes.length || !material) return;
+    loadFirst([gibs(sizes[0])], 30000)
+      .then(hd => { prep(hd); material.uniforms.dayTexture.value = hd; sharpen(sizes.slice(1)); })
+      .catch(() => {});
+  })([4096, 8192]);
 }).catch(err => {
   console.error('texture load failed', err);
   world.globeImageUrl(UNPKG + 'earth-day.jpg').bumpImageUrl(UNPKG + 'earth-topology.png');
