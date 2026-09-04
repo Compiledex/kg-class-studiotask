@@ -832,11 +832,19 @@ function emojiTex(ch){
   const t = new THREE.CanvasTexture(c); t.anisotropy = 4;
   return t;
 }
-function spriteMat(kind){
-  if (!wxSpriteTex[kind]) wxSpriteTex[kind] = emojiTex(WX_EMOJI[kind]);
-  if (!wxSpriteMat[kind]) wxSpriteMat[kind] = new THREE.SpriteMaterial({ map: wxSpriteTex[kind], transparent: true, depthWrite: false });
-  wxSpriteMat[kind].opacity = 1;
-  return wxSpriteMat[kind];
+function spriteMat(key, ch){
+  if (!wxSpriteTex[key]) wxSpriteTex[key] = emojiTex(ch);
+  if (!wxSpriteMat[key]) wxSpriteMat[key] = new THREE.SpriteMaterial({ map: wxSpriteTex[key], transparent: true, depthWrite: false });
+  wxSpriteMat[key].opacity = 1;
+  return wxSpriteMat[key];
+}
+// icon key + glyph for a capital, taking day/night into account for clear/partly skies
+function wxIcon(c){
+  const k = kindOf(c.wx.code);
+  const day = c.wx.isDay !== 0;
+  if (k === 'clear')  return day ? ['clear', '☀️']  : ['clearNight', '🌙'];
+  if (k === 'partly') return day ? ['partly', '⛅'] : ['partlyNight', '☁️'];
+  return [k, WX_EMOJI[k]];
 }
 
 function buildWxGlobe(){
@@ -853,7 +861,6 @@ function buildWxGlobe(){
   if (!cities.length) return;
 
   wxGroup = new THREE.Group();
-  const ICON_KINDS = new Set(['rain', 'showers', 'storm', 'snow', 'fog']);
   const basis = new Map();
   for (const c of cities){
     const P = gcoord(c.lat, c.lng, 0);
@@ -863,12 +870,11 @@ function buildWxGlobe(){
     const north = new THREE.Vector3().crossVectors(up, east).normalize();
     basis.set(c, { P, up, east, north });
 
-    const kind = kindOf(c.wx.code);
-    if (!ICON_KINDS.has(kind)) continue;                 // only flag the interesting weather
-    const spr = new THREE.Sprite(spriteMat(kind));
-    const s = GLOBE_R * 0.055; spr.scale.set(s, s, 1);
+    const [key, ch] = wxIcon(c);                         // every capital gets an icon — sun included
+    const spr = new THREE.Sprite(spriteMat(key, ch));
+    const s = GLOBE_R * 0.05; spr.scale.set(s, s, 1);
     spr.position.copy(P).addScaledVector(up, GLOBE_R * 0.045);
-    spr.userData.kind = kind;
+    spr.userData.kind = kindOf(c.wx.code);
     wxGroup.add(spr); wxIcons.push(spr);
   }
 
