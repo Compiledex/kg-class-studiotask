@@ -1048,9 +1048,12 @@ function wxTick(ts){
   wxRAF = requestAnimationFrame(wxTick);
 }
 
+let wxError = '';
+const hasWxData = () => CAPITALS.some(c => c.wx && c.wx.code != null);
+
 function applyPointStyle(){
-  if (wxOn){
-    // weather icons mark the capitals — hide the plain pins
+  // hide the plain pins only when the weather icons are actually there to mark the capitals
+  if (wxOn && hasWxData()){
     world.pointColor(() => 'rgba(0,0,0,0)').pointRadius(0.01).pointAltitude(0.001);
   } else {
     world.pointColor(d => d.__dark ? '#7aa2ff' : '#ffd23f').pointRadius(0.28).pointAltitude(0.012);
@@ -1064,32 +1067,68 @@ function updateWxLine(){
   for (const c of CAPITALS) if (c.wx && c.wx.code != null){ const k = kindOf(c.wx.code); tally[k] = (tally[k] || 0) + 1; }
   const order = ['storm','showers','rain','snow','fog','cloud','partly','clear'];
   const txt = order.filter(k => tally[k]).map(k => `${WX_EMOJI[k]} ${tally[k]}`).join('  ');
-  line.textContent = txt || (wxLoading ? 'loading world weather…' : 'no data');
+  line.textContent = txt || (wxLoading ? 'loading world weather…' : (wxError || 'no data'));
   line.hidden = false;
 }
-function fetchGlobalWx(){
-  wxLoading = true; updateWxLine();
+
+const WX_CACHE_KEY = 'wxGlobalCache';
+const WX_CACHE_MS = 20 * 60 * 1000;   // Open-Meteo free tier counts each location as a call — cache hard
+function readWxCache(){
+  try {
+    const j = JSON.parse(localStorage.getItem(WX_CACHE_KEY) || 'null');
+    if (j && Array.isArray(j.d) && j.d.length === CAPITALS.length) return j;
+  } catch (e) {}
+  return null;
+}
+function applyWxRows(rows){
+  rows.forEach((r, i) => { if (CAPITALS[i] && r) CAPITALS[i].wx = { code: r.c, temp: r.t, isDay: r.i }; });
+}
+
+function fetchGlobalWx(force){
+  const cached = readWxCache();
+  if (cached && !force && Date.now() - cached.t < WX_CACHE_MS){
+    if (!hasWxData()){
+      applyWxRows(cached.d);
+      wxError = '';
+      if (wxOn){ applyPointStyle(); updateWxLine(); buildWxGlobe(); }
+    }
+    return;   // still fresh — don't spend an API call
+  }
+
+  wxLoading = true; wxError = ''; updateWxLine();
   const lat = CAPITALS.map(c => c.lat.toFixed(3)).join(',');
   const lng = CAPITALS.map(c => c.lng.toFixed(3)).join(',');
   fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=weather_code,temperature_2m,is_day&timezone=UTC`)
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(res => {
       const list = Array.isArray(res) ? res : [res];
-      list.forEach((o, i) => {
-        const c = CAPITALS[i]; if (!c) return;
-        const cur = o.current || {};
-        c.wx = { code: cur.weather_code, temp: cur.temperature_2m, isDay: cur.is_day };
+      const rows = CAPITALS.map((c, i) => {
+        const cur = (list[i] && list[i].current) || {};
+        return { c: cur.weather_code, t: cur.temperature_2m, i: cur.is_day };
       });
-      wxLoading = false;
+      applyWxRows(rows);
+      wxLoading = false; wxError = '';
+      try { localStorage.setItem(WX_CACHE_KEY, JSON.stringify({ t: Date.now(), d: rows })); } catch (e) {}
       if (wxOn){ applyPointStyle(); updateWxLine(); buildWxGlobe(); }
     })
-    .catch(err => { console.warn('global weather failed', err); wxLoading = false; updateWxLine(); });
+    .catch(err => {
+      console.warn('global weather failed', err);
+      wxLoading = false;
+      const stale = readWxCache();
+      if (stale && !hasWxData()){
+        applyWxRows(stale.d);
+        wxError = 'showing last cached weather';
+      } else {
+        wxError = /429/.test(String(err)) ? 'weather rate-limited — try later' : 'weather unavailable';
+      }
+      if (wxOn){ applyPointStyle(); updateWxLine(); buildWxGlobe(); }
+    });
 }
 el('tWx').addEventListener('change', e => {
   wxOn = e.target.checked;
   if (wxOn){
     if (!CAPITALS.some(c => c.wx)) fetchGlobalWx();
-    wxTimer = setInterval(fetchGlobalWx, 15 * 60 * 1000);
+    wxTimer = setInterval(fetchGlobalWx, 20 * 60 * 1000);
   } else {
     clearInterval(wxTimer); wxTimer = null;
   }
