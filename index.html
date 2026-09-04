@@ -1072,7 +1072,9 @@ function updateWxLine(){
 }
 
 const WX_CACHE_KEY = 'wxGlobalCacheV2';   // v2: rows now carry full detail + per-capital timezone
-const WX_CACHE_MS = 20 * 60 * 1000;   // Open-Meteo free tier counts each location as a call — cache hard
+// Open-Meteo's free tier counts EACH location in the batch as a separate API call (~197 here),
+// against a 10,000/day budget shared by everyone on the same network — so refresh sparingly.
+const WX_CACHE_MS = 60 * 60 * 1000;
 function readWxCache(){
   try {
     const j = JSON.parse(localStorage.getItem(WX_CACHE_KEY) || 'null');
@@ -1134,9 +1136,11 @@ function fetchGlobalWx(force){
       const stale = readWxCache();
       if (stale && !hasWxData()){
         applyWxRows(stale.d);
-        wxError = 'showing last cached weather';
+        wxError = 'Showing the last cached weather.';
       } else {
-        wxError = /429/.test(String(err)) ? 'weather rate-limited — try later' : 'weather unavailable';
+        wxError = /429/.test(String(err))
+          ? "Open-Meteo's free daily limit is exhausted (shared across everyone on this network) — it resets at 00:00 UTC."
+          : 'Weather service unavailable right now.';
       }
       if (wxOn){ applyPointStyle(); updateWxLine(); buildWxGlobe(); }
     });
@@ -1145,7 +1149,7 @@ el('tWx').addEventListener('change', e => {
   wxOn = e.target.checked;
   if (wxOn){
     if (!CAPITALS.some(c => c.wx)) fetchGlobalWx();
-    wxTimer = setInterval(fetchGlobalWx, 20 * 60 * 1000);
+    wxTimer = setInterval(fetchGlobalWx, 60 * 60 * 1000);
   } else {
     clearInterval(wxTimer); wxTimer = null;
   }
@@ -1220,9 +1224,7 @@ function renderWeatherPanel(cap, gaveUp){
     el('fxText').textContent = 'Weather unavailable';
     el('pWx').hidden = true;
     el('pState').className = 'state err';
-    el('pState').textContent = wxError
-      ? `Weather unavailable — ${wxError}. Local time is estimated from longitude.`
-      : 'Weather unavailable (offline?). Local time is estimated from longitude.';
+    el('pState').textContent = (wxError || 'Weather unavailable (offline?).') + ' Local time is estimated from longitude.';
     el('pState').hidden = false;
   } else {
     startClock(null, cap.lng / 15 * 3600);

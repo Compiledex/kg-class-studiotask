@@ -22,6 +22,13 @@ live weather from CDNs and public APIs at runtime:
 Capital coordinates are embedded in the file, so the globe and the day/night
 view still work if the border/texture CDNs are unreachable.
 
+> **Note:** Open-Meteo's free tier is a shared, keyless quota (10,000
+> calls/day) counted **per network**, and each capital in the weather-map
+> request counts as one call (~197 per refresh). On a busy shared connection
+> (a classroom, an office) that budget can run out — the app degrades
+> gracefully when it does (cached data if available, otherwise the plain
+> day/night pins and a message explaining why), and it resets at 00:00 UTC.
+
 ## Features
 
 - **Real-time day/night terminator** computed from the astronomical subsolar
@@ -41,7 +48,7 @@ view still work if the border/texture CDNs are unreachable.
   snow, fog, lightning) driven by the WMO weather code.
 - **Weather map** (on by default) — a single batched Open-Meteo call fetches
   full current conditions *and* each capital's own timezone for all ~195
-  capitals at once (cached 20 min in `localStorage`, so reloads cost no extra
+  capitals at once (cached 1 hour in `localStorage`, so reloads cost no extra
   API calls). It feeds both the floating condition icon over every capital on
   the globe — with animated rain/snow falling onto the surface, storm-icon
   flicker, a HUD tally, and dot colouring when the icons are off — *and* the
