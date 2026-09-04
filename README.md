@@ -64,4 +64,12 @@ view still work if the border/texture CDNs are unreachable.
 
 ## License
 
-_To be decided._
+[MIT](LICENSE) — free for anyone to use, modify and redistribute, for any
+purpose, as long as the copyright notice is kept.
+
+Third-party data and libraries keep their own (all permissive) terms:
+[three.js](https://github.com/mrdoob/three.js) and
+[globe.gl](https://github.com/vasturiano/globe.gl) (MIT),
+[Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/) (public
+domain), [Open-Meteo](https://open-meteo.com) (CC BY 4.0) and NASA GIBS /
+Blue Marble imagery (free to use, credit NASA).
