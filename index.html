@@ -323,12 +323,18 @@ function nearestCapital(lat, lng){
 /* ---------- day / night globe shader (from the globe.gl day-night example) ---------- */
 const vertexShader = `
   varying vec3 vNormal;
-  varying vec3 vObjNormal;
+  varying vec3 vEast;
+  varying vec3 vNorth;
   varying vec2 vUv;
   varying vec3 vViewDir;
   void main() {
     vNormal = normalize(normalMatrix * normal);
-    vObjNormal = normalize(position);
+    // equirect tangent frame, carried into view space (normalMatrix is vertex-only)
+    vec3 nO = normalize(position);
+    vec3 ax = mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), step(0.999, abs(nO.y)));
+    vec3 e = normalize(cross(ax, nO));
+    vEast  = normalize(normalMatrix * e);
+    vNorth = normalize(normalMatrix * normalize(cross(nO, e)));
     vUv = uv;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     vViewDir = normalize(-mv.xyz);
@@ -346,7 +352,8 @@ const fragmentShader = `
   uniform vec2 sunPosition;
   uniform vec2 globeRotation;
   varying vec3 vNormal;
-  varying vec3 vObjNormal;
+  varying vec3 vEast;
+  varying vec3 vNorth;
   varying vec2 vUv;
   varying vec3 vViewDir;
 
@@ -368,18 +375,13 @@ const fragmentShader = `
     vec3 L = normalize(rotX * rotY * Polar2Cartesian(sunPosition));
     vec3 V = normalize(vViewDir);
 
-    // --- terrain relief: perturb the normal by the elevation-map gradient ---
-    vec3 nObj = normalize(vObjNormal);
-    vec3 axis = abs(nObj.y) > 0.999 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
-    vec3 east  = normalize(cross(axis, nObj));
-    vec3 north = normalize(cross(nObj, east));
+    // --- terrain relief: perturb the view-space normal by the elevation-map gradient ---
     vec2 tx = vec2(1.0 / 4096.0, 1.0 / 2048.0);
     float hL = texture2D(bumpTexture, vUv - vec2(tx.x, 0.0)).r;
     float hR = texture2D(bumpTexture, vUv + vec2(tx.x, 0.0)).r;
     float hD = texture2D(bumpTexture, vUv - vec2(0.0, tx.y)).r;
     float hU = texture2D(bumpTexture, vUv + vec2(0.0, tx.y)).r;
-    vec3 nPert = normalize(nObj - bumpScale * ((hR - hL) * east + (hU - hD) * north));
-    vec3 N = normalize(normalMatrix * nPert);
+    vec3 N = normalize(Nsmooth - bumpScale * ((hR - hL) * normalize(vEast) + (hU - hD) * normalize(vNorth)));
 
     // --- sunlight on a sphere: ambient + diffuse, darkening toward the terminator ---
     float ndlS = dot(Nsmooth, L);
