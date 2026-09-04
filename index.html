@@ -323,10 +323,12 @@ function nearestCapital(lat, lng){
 /* ---------- day / night globe shader (from the globe.gl day-night example) ---------- */
 const vertexShader = `
   varying vec3 vNormal;
+  varying vec3 vObjNormal;
   varying vec2 vUv;
   varying vec3 vViewDir;
   void main() {
     vNormal = normalize(normalMatrix * normal);
+    vObjNormal = normalize(position);
     vUv = uv;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     vViewDir = normalize(-mv.xyz);
@@ -338,10 +340,13 @@ const fragmentShader = `
   uniform sampler2D dayTexture;
   uniform sampler2D nightTexture;
   uniform sampler2D waterTexture;
+  uniform sampler2D bumpTexture;
   uniform float hasWater;
+  uniform float bumpScale;
   uniform vec2 sunPosition;
   uniform vec2 globeRotation;
   varying vec3 vNormal;
+  varying vec3 vObjNormal;
   varying vec2 vUv;
   varying vec3 vViewDir;
 
@@ -359,46 +364,51 @@ const fragmentShader = `
     mat3 rotX = mat3(1, 0, 0, 0, cos(invLat), -sin(invLat), 0, sin(invLat), cos(invLat));
     mat3 rotY = mat3(cos(invLon), 0, sin(invLon), 0, 1, 0, -sin(invLon), 0, cos(invLon));
 
-    vec3 N = normalize(vNormal);
+    vec3 Nsmooth = normalize(vNormal);
     vec3 L = normalize(rotX * rotY * Polar2Cartesian(sunPosition));
     vec3 V = normalize(vViewDir);
 
-    float intensity = dot(N, L);
-    float blendFactor = smoothstep(-0.12, 0.12, intensity);
+    // --- terrain relief: perturb the normal by the elevation-map gradient ---
+    vec3 nObj = normalize(vObjNormal);
+    vec3 axis = abs(nObj.y) > 0.999 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    vec3 east  = normalize(cross(axis, nObj));
+    vec3 north = normalize(cross(nObj, east));
+    vec2 tx = vec2(1.0 / 4096.0, 1.0 / 2048.0);
+    float hL = texture2D(bumpTexture, vUv - vec2(tx.x, 0.0)).r;
+    float hR = texture2D(bumpTexture, vUv + vec2(tx.x, 0.0)).r;
+    float hD = texture2D(bumpTexture, vUv - vec2(0.0, tx.y)).r;
+    float hU = texture2D(bumpTexture, vUv + vec2(0.0, tx.y)).r;
+    vec3 nPert = normalize(nObj - bumpScale * ((hR - hL) * east + (hU - hD) * north));
+    vec3 N = normalize(normalMatrix * nPert);
+
+    // --- sunlight on a sphere: ambient + diffuse, darkening toward the terminator ---
+    float ndlS = dot(Nsmooth, L);
+    float dayMask = smoothstep(-0.09, 0.12, ndlS);
+    float ndl = clamp(dot(N, L), 0.0, 1.0);
+    float diffuse = pow(ndl, 0.65);
 
     vec3 dayColor = texture2D(dayTexture, vUv).rgb;
-    vec3 nightColor = texture2D(nightTexture, vUv).rgb * vec3(0.85, 0.95, 1.35) * 1.15;
+    vec3 nightColor = texture2D(nightTexture, vUv).rgb * vec3(1.0, 0.92, 0.72) * 0.85;
 
-    // --- colour grade: lift the Blue Marble map out of its muted palette ---
-    float dLum = dot(dayColor, vec3(0.299, 0.587, 0.114));
-    dayColor = mix(vec3(dLum), dayColor, 1.5);                 // +50% saturation
-    dayColor = (dayColor - 0.5) * 1.12 + 0.5;                  // gentle S-contrast
-    dayColor *= vec3(1.03, 1.05, 1.10);                        // brighten, bias cool for richer seas
-    float blueDom = min(dayColor.b - dayColor.r, dayColor.b - dayColor.g);   // ocean: bluest channel
-    float sea = smoothstep(0.34, 0.07, dLum) * smoothstep(-0.01, 0.06, blueDom);
-    dayColor = mix(dayColor, vec3(0.05, 0.34, 0.60) * (0.55 + dLum * 1.4), sea * 0.5);
-    dayColor = clamp(dayColor, 0.0, 1.0);
+    vec3 lit = dayColor * (0.16 + 0.9 * diffuse);
 
-    // warm the terminator, cool the deep day
-    vec3 warm = mix(vec3(1.0, 0.72, 0.45), vec3(1.0), smoothstep(0.0, 0.35, intensity));
-    dayColor *= mix(vec3(1.0), warm, smoothstep(-0.05, 0.25, intensity) * (1.0 - smoothstep(0.25, 0.6, intensity)));
+    // sunrise / sunset reddening in the twilight band
+    float dusk = smoothstep(0.0, 0.20, ndlS) * (1.0 - smoothstep(0.20, 0.5, ndlS));
+    lit += dayColor * dusk * vec3(0.42, 0.15, 0.03);
 
-    vec3 color = mix(nightColor, dayColor, blendFactor);
+    vec3 color = mix(nightColor, lit, dayMask);
 
-    // sun glint on oceans
+    // specular sun glint on water
     if (hasWater > 0.5) {
       float water = texture2D(waterTexture, vUv).r;
       vec3 H = normalize(L + V);
-      float spec = pow(max(dot(N, H), 0.0), 90.0);
-      color += spec * water * blendFactor * vec3(1.0, 0.93, 0.78) * 0.9;
+      float spec = pow(max(dot(Nsmooth, H), 0.0), 120.0);
+      color += spec * water * dayMask * vec3(1.0, 0.95, 0.82) * 1.1;
     }
 
-    // blue atmospheric rim on the lit limb
-    float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
-    color += fres * blendFactor * vec3(0.18, 0.4, 0.75) * 0.6;
-
-    // gentle exposure so the night side doesn't crush
-    color = pow(color, vec3(0.95)) * 1.03;
+    // atmospheric scatter at the lit limb
+    float rim = pow(1.0 - max(dot(Nsmooth, V), 0.0), 3.5);
+    color += rim * dayMask * vec3(0.20, 0.42, 0.75) * 0.55;
 
     gl_FragColor = vec4(color, 1.0);
   }
@@ -487,7 +497,8 @@ world.pointOfView({ altitude: 2.6 });
 const controls = world.controls();
 controls.autoRotate = true;
 controls.autoRotateSpeed = 0.35;
-controls.minDistance = 180;
+controls.minDistance = 135;   // globe radius is 100 — stop ~0.35R above the surface
+controls.maxDistance = 500;   // and don't let it shrink to a dot
 
 /* ---------- HD textures + shader material ---------- */
 const renderer = world.renderer();
@@ -531,7 +542,9 @@ Promise.all([
       dayTexture:    { value: day },
       nightTexture:  { value: night },
       waterTexture:  { value: day },
+      bumpTexture:   { value: day },
       hasWater:      { value: 0 },
+      bumpScale:     { value: 0 },
       sunPosition:   { value: new THREE.Vector2() },
       globeRotation: { value: new THREE.Vector2() }
     },
@@ -546,6 +559,23 @@ Promise.all([
   // ocean sun-glint mask
   loadFirst([GH + 'water_4k.png'])
     .then(w => { prep(w); material.uniforms.waterTexture.value = w; material.uniforms.hasWater.value = 1; })
+    .catch(() => {});
+
+  // elevation map -> real terrain relief in the lighting
+  loadFirst([GH + 'elev_bump_4k.jpg'])
+    .then(b => { prep(b); material.uniforms.bumpTexture.value = b; material.uniforms.bumpScale.value = 1.6; })
+    .catch(() => {});
+
+  // upgrade the day map to NASA's cloud-free "Blue Marble: Shaded Relief + Bathymetry" (GIBS, 8K)
+  const GIBS = 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?version=1.1.1&service=WMS&request=GetMap&srs=EPSG:4326&bbox=-180,-90,180,90&layers=BlueMarble_ShadedRelief_Bathymetry&styles=&format=image/jpeg&transparent=false';
+  loadFirst([GIBS + '&width=8192&height=4096', GIBS + '&width=4096&height=2048'])
+    .then(hd => {
+      prep(hd);
+      const prev = material.uniforms.dayTexture.value;
+      material.uniforms.dayTexture.value = hd;
+      if (material.uniforms.waterTexture.value === prev) material.uniforms.waterTexture.value = hd;
+      if (material.uniforms.bumpTexture.value === prev) material.uniforms.bumpTexture.value = hd;
+    })
     .catch(() => {});
 }).catch(err => {
   console.error('texture load failed', err);
