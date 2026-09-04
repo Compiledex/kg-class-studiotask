@@ -7,7 +7,7 @@ Everything lives in a single file: [`index.html`](index.html). No build step, no
 ## Run it
 
 Open `index.html` in a modern browser (Chrome, Edge, Firefox, Safari).
-
+LIVE Demo: [DEMO](https://compiledex.github.io/kg-class-studiotask/)
 An internet connection is required — the page pulls libraries, map textures and
 live weather from CDNs and public APIs at runtime:
 
