@@ -1152,16 +1152,34 @@ function selectLocation(cap){
   el('pCity').textContent = cap.c;
   el('pCountry').textContent = cap.n;
   el('pCoords').textContent = `${cap.lat.toFixed(2)}°, ${cap.lng.toFixed(2)}°`;
-  el('pWx').hidden = true;
-  el('pState').className = 'state';
-  el('pState').innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px"></span>Loading weather…';
-  el('fxTemp').textContent = '–';
-  el('fxIcon').textContent = '⏳';
-  el('fxText').textContent = 'Loading…';
-  WeatherFX.start();
-
   world.ringsData([{ lat: cap.lat, lng: cap.lng }]);
   world.pointOfView({ lat: cap.lat, lng: cap.lng, altitude: 1.7 }, 900);
+  startClock(guessTz(cap.lng), cap.lng / 15 * 3600);   // provisional — replaced if the detailed call succeeds
+
+  const haveQuick = cap.wx && cap.wx.code != null;      // reading from the weather-map batch, if we have one
+  const quickNight = haveQuick && cap.wx.isDay != null ? cap.wx.isDay === 0 : isDark(cap.lat, cap.lng, getSunPosition(new Date()));
+  const badge = el('pDayNight');
+  badge.textContent = quickNight ? '🌙 Night' : '☀️ Daytime';
+  badge.className = 'badge ' + (quickNight ? 'night' : 'day');
+
+  if (haveQuick){
+    let [desc, icon] = WMO[cap.wx.code] || ['—','•'];
+    if (quickNight && (cap.wx.code === 0 || cap.wx.code === 1)) icon = '🌙';
+    WeatherFX.set(cap.wx.code, !quickNight);
+    el('fxTemp').textContent = fmtTemp(cap.wx.temp);
+    el('fxIcon').textContent = icon;
+    el('fxText').textContent = desc;
+  } else {
+    WeatherFX.start();
+    el('fxTemp').textContent = '–'; el('fxIcon').textContent = '⏳'; el('fxText').textContent = 'Loading…';
+  }
+  el('pFeels').textContent = '–'; el('pHum').textContent = '–';
+  el('pWind').textContent = '–'; el('pPrecip').textContent = '–';
+  el('pWx').hidden = false;
+  el('pState').hidden = false;
+  el('pState').className = 'state';
+  el('pState').innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px"></span>' +
+    (haveQuick ? 'Refining details…' : 'Loading weather…');
 
   const params = new URLSearchParams({
     latitude: cap.lat, longitude: cap.lng,
@@ -1177,7 +1195,6 @@ function selectLocation(cap){
       const night = cur.is_day === 0;
 
       startClock(data.timezone, data.utc_offset_seconds);
-      const badge = el('pDayNight');
       badge.textContent = night ? '🌙 Night' : '☀️ Daytime';
       badge.className = 'badge ' + (night ? 'night' : 'day');
 
@@ -1194,27 +1211,31 @@ function selectLocation(cap){
         ? `${cur.wind_speed_10m.toFixed(1)} m/s ${compass(cur.wind_direction_10m || 0)}` : '–';
       el('pPrecip').textContent = cur.precipitation != null ? cur.precipitation.toFixed(1) + ' mm' : '–';
 
-      el('pState').className = 'state';
-      el('pState').textContent = '';
       el('pState').hidden = true;
       el('pWx').hidden = false;
     })
     .catch(err => {
       if (token !== reqToken) return;
       console.error(err);
-      startClock(guessTz(cap.lng), cap.lng / 15 * 3600); // fall back to a longitude estimate
-      const badge = el('pDayNight');
-      const nightGuess = isDark(cap.lat, cap.lng, getSunPosition(new Date()));
-      badge.textContent = nightGuess ? '🌙 Night' : '☀️ Daytime';
-      badge.className = 'badge ' + (nightGuess ? 'night' : 'day');
-      WeatherFX.set(null, !nightGuess);
-      el('fxTemp').textContent = '–';
-      el('fxIcon').textContent = '⚠️';
-      el('fxText').textContent = 'Weather unavailable';
-      el('pState').hidden = false;
-      el('pState').className = 'state err';
-      el('pState').textContent = 'Weather unavailable (offline?). Local time is estimated from longitude.';
-      el('pWx').hidden = true;
+      if (haveQuick){
+        // keep showing the weather-map reading; just flag that the extra detail didn't come through
+        el('pState').className = 'state';
+        el('pState').textContent = /429/.test(String(err))
+          ? 'Live detail rate-limited — showing the weather-map reading. Local time is approximate.'
+          : 'Live detail unavailable — showing the weather-map reading. Local time is approximate.';
+        el('pState').hidden = false;
+      } else {
+        WeatherFX.set(null, !quickNight);
+        el('fxTemp').textContent = '–';
+        el('fxIcon').textContent = '⚠️';
+        el('fxText').textContent = 'Weather unavailable';
+        el('pWx').hidden = true;
+        el('pState').className = 'state err';
+        el('pState').textContent = /429/.test(String(err))
+          ? 'Weather rate-limited — try again later. Local time is estimated from longitude.'
+          : 'Weather unavailable (offline?). Local time is estimated from longitude.';
+        el('pState').hidden = false;
+      }
     });
 }
 
