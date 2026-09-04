@@ -369,6 +369,16 @@ const fragmentShader = `
     vec3 dayColor = texture2D(dayTexture, vUv).rgb;
     vec3 nightColor = texture2D(nightTexture, vUv).rgb * vec3(0.85, 0.95, 1.35) * 1.15;
 
+    // --- colour grade: lift the Blue Marble map out of its muted palette ---
+    float dLum = dot(dayColor, vec3(0.299, 0.587, 0.114));
+    dayColor = mix(vec3(dLum), dayColor, 1.5);                 // +50% saturation
+    dayColor = (dayColor - 0.5) * 1.12 + 0.5;                  // gentle S-contrast
+    dayColor *= vec3(1.03, 1.05, 1.10);                        // brighten, bias cool for richer seas
+    float blueDom = min(dayColor.b - dayColor.r, dayColor.b - dayColor.g);   // ocean: bluest channel
+    float sea = smoothstep(0.34, 0.07, dLum) * smoothstep(-0.01, 0.06, blueDom);
+    dayColor = mix(dayColor, vec3(0.05, 0.34, 0.60) * (0.55 + dLum * 1.4), sea * 0.5);
+    dayColor = clamp(dayColor, 0.0, 1.0);
+
     // warm the terminator, cool the deep day
     vec3 warm = mix(vec3(1.0, 0.72, 0.45), vec3(1.0), smoothstep(0.0, 0.35, intensity));
     dayColor *= mix(vec3(1.0), warm, smoothstep(-0.05, 0.25, intensity) * (1.0 - smoothstep(0.25, 0.6, intensity)));
@@ -387,8 +397,8 @@ const fragmentShader = `
     float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
     color += fres * blendFactor * vec3(0.18, 0.4, 0.75) * 0.6;
 
-    // gentle exposure / contrast so the Blue Marble map reads richly
-    color = pow(color, vec3(0.92)) * 1.06;
+    // gentle exposure so the night side doesn't crush
+    color = pow(color, vec3(0.95)) * 1.03;
 
     gl_FragColor = vec4(color, 1.0);
   }
