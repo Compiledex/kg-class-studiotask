@@ -14,7 +14,8 @@ live weather from CDNs and public APIs at runtime:
 | What | Source |
 | --- | --- |
 | 3D engine | `three` + `globe.gl` (esm.sh) |
-| Earth / cloud / water textures | jsDelivr + unpkg |
+| Base map | NASA GIBS *Blue Marble: Shaded Relief + Bathymetry* (WMS, no key), 4K fallback via jsDelivr |
+| Elevation / cloud / water / night maps | jsDelivr + unpkg |
 | Country borders | Natural Earth (`nvkelso/natural-earth-vector`, via jsDelivr) |
 | Weather, timezone & local time | [Open-Meteo](https://open-meteo.com) (no API key) |
 
@@ -26,8 +27,12 @@ view still work if the border/texture CDNs are unreachable.
 - **Real-time day/night terminator** computed from the astronomical subsolar
   point (updates every minute). The ☀️ marker shows where the Sun is directly
   overhead; the shadowed hemisphere is night.
-- **4K "Blue Marble" globe** with an optional drifting cloud layer, ocean
-  sun-glint, atmospheric rim, anisotropic filtering and antialiasing.
+- **Realistically lit globe** — NASA cloud-free satellite imagery, a custom
+  shader with ambient + sun-diffuse falloff toward the terminator, sunset
+  reddening in the twilight band, elevation-map relief so mountains catch the
+  light, water-only sun-glint, and an atmospheric limb. Optional drifting cloud
+  layer; anisotropic filtering and antialiasing. Zoom is clamped so it stays a
+  globe view.
 - **Click anywhere** — a capital, a country, or open ocean — to fly there and
   open a panel with the **live local time** (correct timezone/DST), a
   day/night badge, and current **weather**: temperature, feels-like, condition,
@@ -47,12 +52,14 @@ view still work if the border/texture CDNs are unreachable.
 
 ## Tech notes
 
-- Custom GLSL shader blends day and night Earth textures across the terminator
-  and adds the ocean specular highlight and atmospheric rim.
+- Custom GLSL shader: day/night texture blend across a soft terminator, plus
+  diffuse sun lighting, twilight scattering, elevation-map normal perturbation,
+  water specular and a fresnel atmosphere — the day map upgrades from the 4K
+  fallback to the NASA GIBS 8K image in the background once it loads.
 - On-globe weather markers/particles are plain `three` objects added to the
   scene, positioned with the same polar→cartesian mapping `three-globe` uses so
   they sit exactly on the capitals.
-- No bundler, no dependencies checked in — it's ~1200 lines of HTML + CSS + one
+- No bundler, no dependencies checked in — it's ~1300 lines of HTML + CSS + one
   ES-module `<script>`.
 
 ## License
